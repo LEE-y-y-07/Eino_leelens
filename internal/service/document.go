@@ -1,0 +1,463 @@
+package service
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"gitee.com/li-yuyanglee/leelens-backend/config"
+	"gitee.com/li-yuyanglee/leelens-backend/internal/eventbus"
+	"gitee.com/li-yuyanglee/leelens-backend/internal/model"
+	"gitee.com/li-yuyanglee/leelens-backend/internal/repository"
+	"k8s.io/klog/v2"
+)
+
+type DocumentService struct {
+	cfg        *config.Config
+	docRepo    repository.DocumentRepository
+	repoRepo   repository.RepoRepository
+	ratingRepo repository.DocumentRatingRepository
+	pdfService *PDFService
+	bus        *eventbus.DocEventBus
+}
+
+// NewDocumentService 创建文档服务
+func NewDocumentService(cfg *config.Config, docRepo repository.DocumentRepository, repoRepo repository.RepoRepository, ratingRepo repository.DocumentRatingRepository, bus *eventbus.DocEventBus) *DocumentService {
+	return &DocumentService{
+		cfg:        cfg,
+		docRepo:    docRepo,
+		repoRepo:   repoRepo,
+		ratingRepo: ratingRepo,
+		pdfService: NewPDFService(),
+		bus:        bus,
+	}
+}
+
+type CreateDocumentRequest struct {
+	RepositoryID uint   `json:"repository_id"`
+	TaskID       uint   `json:"task_id"`
+	Title        string `json:"title"`
+	Filename     string `json:"filename"`
+	Content      string `json:"content"`
+	SortOrder    int    `json:"sort_order"`
+}
+
+func (s *DocumentService) UpdateTaskID(docID uint, taskID uint) error {
+	return s.docRepo.UpdateTaskID(docID, taskID)
+}
+func (s *DocumentService) TransferLatest(oldDocID uint, newDocID uint) error {
+	return s.docRepo.TransferLatest(oldDocID, newDocID)
+}
+
+func (s *DocumentService) Create(req CreateDocumentRequest) (*model.Document, error) {
+	doc := &model.Document{
+		RepositoryID: req.RepositoryID,
+		TaskID:       req.TaskID,
+		Title:        req.Title,
+		Filename:     req.Filename,
+		Content:      req.Content,
+		SortOrder:    req.SortOrder,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+
+	if err := s.docRepo.CreateVersioned(doc); err != nil {
+		return nil, err
+	}
+
+	// 发布文档保存事件，触发向量生成
+	if s.bus != nil && doc.IsLatest {
+		_ = s.bus.Publish(context.Background(), eventbus.DocEventSaved, eventbus.DocEvent{
+			Type:         eventbus.DocEventSaved,
+			RepositoryID: doc.RepositoryID,
+			DocID:        doc.ID,
+			Title:        doc.Title,
+			Content:      doc.Content,
+		})
+	}
+
+	return doc, nil
+}
+
+func (s *DocumentService) GetByRepository(repoID uint) ([]model.Document, error) {
+	return s.docRepo.GetByRepository(repoID)
+}
+
+func (s *DocumentService) Get(id uint) (*model.Document, error) {
+	return s.docRepo.Get(id)
+}
+
+func (s *DocumentService) GetVersions(docID uint) ([]model.Document, error) {
+	doc, err := s.docRepo.Get(docID)
+	if err != nil {
+		return nil, err
+	}
+	return s.docRepo.GetVersions(doc.RepositoryID, doc.Title)
+}
+
+func (s *DocumentService) Update(docID uint, content string) (*model.Document, error) {
+	old, err := s.docRepo.Get(docID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 创建新版本而非原地覆盖：保留原业务标识（repo/task/title/filename/sort_order），
+	// 仅替换内容。CreateVersioned 在事务内将旧 is_latest 置 false、新版 version 自增并 is_latest=true。
+	newDoc := &model.Document{
+		RepositoryID: old.RepositoryID,
+		TaskID:       old.TaskID,
+		Title:        old.Title,
+		Filename:     old.Filename,
+		Content:      content,
+		SortOrder:    old.SortOrder,
+	}
+
+	if err := s.docRepo.CreateVersioned(newDoc); err != nil {
+		return nil, err
+	}
+
+	// 发布文档更新事件，触发向量重新生成
+	if s.bus != nil {
+		_ = s.bus.Publish(context.Background(), eventbus.DocEventUpdated, eventbus.DocEvent{
+			Type:         eventbus.DocEventUpdated,
+			RepositoryID: newDoc.RepositoryID,
+			DocID:        newDoc.ID,
+			Title:        newDoc.Title,
+			Content:      newDoc.Content,
+		})
+	}
+
+	return newDoc, nil
+}
+
+func (s *DocumentService) Delete(id uint) error {
+	return s.docRepo.Delete(id)
+}
+
+func (s *DocumentService) DeleteByTaskID(taskID uint) error {
+	return s.docRepo.DeleteByTaskID(taskID)
+}
+
+func (s *DocumentService) ExportAll(repoID uint) ([]byte, string, error) {
+	repo, err := s.repoRepo.GetBasic(repoID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	docs, err := s.docRepo.GetByRepository(repoID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if len(docs) == 0 {
+		return nil, "", fmt.Errorf("no documents to export")
+	}
+
+	buf := new(bytes.Buffer)
+	zipWriter := zip.NewWriter(buf)
+
+	indexContent := s.generateIndex(repo.Name, docs)
+	indexFile, err := zipWriter.Create("index.md")
+	if err != nil {
+		return nil, "", err
+	}
+	indexFile.Write([]byte(indexContent))
+
+	for _, doc := range docs {
+		f, err := zipWriter.Create(doc.Filename)
+		if err != nil {
+			return nil, "", err
+		}
+		f.Write([]byte(doc.Content))
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return nil, "", err
+	}
+
+	filename := fmt.Sprintf("%s-docs.zip", repo.Name)
+	return buf.Bytes(), filename, nil
+}
+
+// ExportPDF 导出仓库下所有文档为PDF
+func (s *DocumentService) ExportPDF(repoID uint) ([]byte, string, error) {
+	repo, err := s.repoRepo.GetBasic(repoID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	docs, err := s.docRepo.GetByRepository(repoID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if len(docs) == 0 {
+		return nil, "", fmt.Errorf("no documents to export")
+	}
+
+	klog.V(6).Infof("开始导出PDF: repoID=%d, 文档数量=%d", repoID, len(docs))
+	if s.pdfService == nil {
+		s.pdfService = NewPDFService()
+	}
+	data, err := s.pdfService.Generate(docs)
+	if err != nil {
+		return nil, "", err
+	}
+
+	filename := fmt.Sprintf("%s-docs.pdf", repo.Name)
+	klog.V(6).Infof("导出PDF完成: repoID=%d, 文件大小=%d", repoID, len(data))
+	return data, filename, nil
+}
+
+func (s *DocumentService) generateIndex(repoName string, docs []model.Document) string {
+	content := fmt.Sprintf("# %s - 项目文档\n\n", repoName)
+	content += "## 目录\n\n"
+
+	for _, doc := range docs {
+		content += fmt.Sprintf("- [%s](%s)\n", doc.Title, doc.Filename)
+	}
+
+	return content
+}
+
+func (s *DocumentService) GetIndex(repoID uint) (string, error) {
+	repo, err := s.repoRepo.GetBasic(repoID)
+	if err != nil {
+		return "", err
+	}
+
+	docs, err := s.docRepo.GetByRepository(repoID)
+	if err != nil {
+		return "", err
+	}
+
+	return s.generateIndex(repo.Name, docs), nil
+}
+
+// GetRedirectURL 获取代码跳转链接
+func (s *DocumentService) GetRedirectURL(docID uint, filePath string) (string, error) {
+	doc, err := s.docRepo.Get(docID)
+	if err != nil {
+		return "", err
+	}
+
+	repo, err := s.repoRepo.GetBasic(doc.RepositoryID)
+	if err != nil {
+		return "", err
+	}
+
+	// 处理仓库 URL
+	repoURL := repo.URL
+	if before, ok := strings.CutSuffix(repoURL, ".git"); ok {
+		repoURL = before
+	}
+
+	branch := repo.CloneBranch
+	if branch == "" {
+		branch = "main" // 默认回退
+	}
+
+	// 清理文件路径 (移除开头的 /)
+	filePath = strings.TrimPrefix(filePath, "/")
+
+	// 构造 URL
+	// 假设是 GitHub/GitLab 风格: base/blob/branch/path
+	// TODO 以后要兼容各种类型
+	return fmt.Sprintf("%s/blob/%s/%s", repoURL, branch, filePath), nil
+}
+
+// SubmitRating 提交文档评分并返回统计信息
+func (s *DocumentService) SubmitRating(documentID uint, score int) (*model.DocumentRatingStats, error) {
+	if s.ratingRepo == nil {
+		return nil, fmt.Errorf("rating repository not configured")
+	}
+	if score < 1 || score > 5 {
+		return nil, fmt.Errorf("score must be between 1 and 5")
+	}
+
+	klog.V(6).Infof("SubmitRating: document_id=%d score=%d", documentID, score)
+
+	latest, err := s.ratingRepo.GetLatestByDocumentID(documentID)
+	if err != nil {
+		return nil, err
+	}
+	if latest != nil && latest.Score == score && time.Since(latest.CreatedAt) <= 10*time.Second {
+		klog.V(6).Infof("SubmitRating: duplicate ignored document_id=%d score=%d", documentID, score)
+		return s.GetRatingStats(documentID)
+	}
+
+	now := time.Now()
+	rating := &model.DocumentRating{
+		DocumentID: documentID,
+		Score:      score,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.ratingRepo.Create(rating); err != nil {
+		return nil, err
+	}
+
+	klog.V(6).Infof("SubmitRating: created rating_id=%d document_id=%d", rating.ID, documentID)
+	return s.GetRatingStats(documentID)
+}
+
+// GetRatingStats 获取文档评分统计信息
+func (s *DocumentService) GetRatingStats(documentID uint) (*model.DocumentRatingStats, error) {
+	if s.ratingRepo == nil {
+		return nil, fmt.Errorf("rating repository not configured")
+	}
+	stats, err := s.ratingRepo.GetStatsByDocumentID(documentID)
+	if err != nil {
+		return nil, err
+	}
+	stats.AverageScore = math.Round(stats.AverageScore*10) / 10
+	klog.V(6).Infof("GetRatingStats: document_id=%d average=%.1f count=%d", documentID, stats.AverageScore, stats.RatingCount)
+	return stats, nil
+}
+
+// GetTokenUsage 获取文档的 Token 用量数据
+func (s *DocumentService) GetTokenUsage(docID uint) (*model.TaskUsage, error) {
+	return s.docRepo.GetTokenUsageByDocID(docID)
+}
+
+// DocumentSearchResult 文档搜索结果
+type DocumentSearchResult struct {
+	DocID    uint   `json:"doc_id"`
+	RepoID   uint   `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+	Title    string `json:"title"`
+	Filename string `json:"filename"`
+	Snippet  string `json:"snippet"`
+}
+
+// SearchDocuments 搜索文档内容（关键词匹配）
+// query: 搜索关键词
+// repoID: 限定仓库ID（可选，nil 表示搜索所有仓库）
+func (s *DocumentService) SearchDocuments(ctx context.Context, query string, repoID *uint) ([]DocumentSearchResult, error) {
+	// 获取所有最新文档
+	var docs []model.Document
+	if repoID != nil {
+		// 搜索指定仓库
+		var err error
+		docs, err = s.docRepo.GetByRepository(*repoID)
+		if err != nil {
+			return nil, fmt.Errorf("获取仓库文档失败: %w", err)
+		}
+	} else {
+		// 搜索所有仓库，只获取最新文档
+		allDocs, err := s.docRepo.GetAllLatest()
+		if err != nil {
+			return nil, fmt.Errorf("获取所有文档失败: %w", err)
+		}
+		docs = allDocs
+	}
+
+	// 关键词搜索（不区分大小写）
+	queryLower := strings.ToLower(query)
+	var matchedDocs []model.Document
+	repoIDs := make(map[uint]struct{})
+
+	for _, doc := range docs {
+		// 在标题、文件名、内容中搜索
+		titleLower := strings.ToLower(doc.Title)
+		filenameLower := strings.ToLower(doc.Filename)
+		contentLower := strings.ToLower(doc.Content)
+
+		if strings.Contains(titleLower, queryLower) ||
+			strings.Contains(filenameLower, queryLower) ||
+			strings.Contains(contentLower, queryLower) {
+			matchedDocs = append(matchedDocs, doc)
+			repoIDs[doc.RepositoryID] = struct{}{}
+		}
+	}
+
+	// 批量获取仓库信息，避免 N+1 查询
+	repoMap := make(map[uint]string)
+	for id := range repoIDs {
+		repo, err := s.repoRepo.GetBasic(id)
+		if err == nil && repo != nil {
+			repoMap[id] = repo.Name
+		}
+	}
+
+	// 构建结果
+	var results []DocumentSearchResult
+	for _, doc := range matchedDocs {
+		repoName := repoMap[doc.RepositoryID]
+		// 生成上下文片段
+		snippet := generateSnippet(doc.Content, query, 200)
+
+		results = append(results, DocumentSearchResult{
+			DocID:    doc.ID,
+			RepoID:   doc.RepositoryID,
+			RepoName: repoName,
+			Title:    doc.Title,
+			Filename: doc.Filename,
+			Snippet:  snippet,
+		})
+	}
+
+	// 限制返回数量
+	if len(results) > 20 {
+		results = results[:20]
+	}
+
+	return results, nil
+}
+
+// generateSnippet 生成搜索结果片段
+// 使用 rune 处理 UTF-8 字符，避免字节索引导致的中文字符截断问题
+func generateSnippet(content, query string, maxLen int) string {
+	// 将内容转换为 rune 切片处理 UTF-8 字符
+	contentRunes := []rune(content)
+	queryRunes := []rune(strings.ToLower(query))
+	contentLower := []rune(strings.ToLower(content))
+
+	// 查找关键词位置（不区分大小写）
+	idx := -1
+	for i := 0; i <= len(contentLower)-len(queryRunes); i++ {
+		match := true
+		for j := 0; j < len(queryRunes); j++ {
+			if contentLower[i+j] != queryRunes[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		// 未找到关键词，返回内容开头
+		if len(contentRunes) > maxLen {
+			return string(contentRunes[:maxLen]) + "..."
+		}
+		return content
+	}
+
+	// 计算片段起始位置，让关键词出现在片段中间位置
+	start := idx - 50
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(queryRunes) + 150
+	if end > len(contentRunes) {
+		end = len(contentRunes)
+	}
+
+	snippet := string(contentRunes[start:end])
+	if start > 0 {
+		snippet = "..." + snippet
+	}
+	if end < len(contentRunes) {
+		snippet = snippet + "..."
+	}
+
+	return snippet
+}

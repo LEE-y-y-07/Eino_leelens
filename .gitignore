@@ -1,0 +1,31 @@
+# Build output
+/bin/
+/tmp/
+build-errors.log
+
+# Local config & data
+config.yaml
+*.db
+*.db-journal
+/data/
+
+# Agents runtime extraction dir (regenerated from embedded)
+/agents/*
+!/agents/*.yaml
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Embed placeholders (generated during build)
+internal/assets/agents/*.yaml
+internal/embed/ui/dist/*
+!internal/embed/ui/dist/.keep
