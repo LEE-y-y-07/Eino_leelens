@@ -19,12 +19,12 @@ func NewSimpleModelProvider(defaultModel model.ToolCallingChatModel) *SimpleMode
 
 // GetModel 获取指定名称的模型
 // 目前只支持默认模型，name 参数被忽略
-func (p *SimpleModelProvider) GetModel(name string) (model.ToolCallingChatModel, error) {
+func (p *SimpleModelProvider) GetModel(name string) (model.BaseChatModel, error) {
 	return p.defaultModel, nil
 }
 
 // DefaultModel 获取默认模型
-func (p *SimpleModelProvider) DefaultModel() model.ToolCallingChatModel {
+func (p *SimpleModelProvider) DefaultModel() model.BaseChatModel {
 	return p.defaultModel
 }
 

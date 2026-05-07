@@ -38,8 +38,13 @@ type TaskUsageService interface {
 }
 
 // ModelWithMetadata 带有元数据的模型包装器
+//
+// ChatModel 字段类型为 einoModel.BaseChatModel（仅要求 Generate/Stream），
+// 这样既能承载旧接口 einoModel.ChatModel（含 BindTools），也能承载
+// einoModel.ToolCallingChatModel（含 WithTools）—— 后者由 ProxyChatModel
+// 在每次调用前通过 WithTools 绑定工具后使用。
 type ModelWithMetadata struct {
-	einoModel.ChatModel
+	ChatModel  einoModel.BaseChatModel
 	APIKeyName string
 	APIKeyID   uint
 	LLMModel   string
@@ -53,9 +58,9 @@ func (m *ModelWithMetadata) Name() string {
 // ModelProvider 模型提供者接口
 type ModelProvider interface {
 	// GetModel 获取指定名称的模型，name 为空时返回默认模型
-	GetModel(name string) (einoModel.ChatModel, error)
+	GetModel(name string) (einoModel.BaseChatModel, error)
 	// DefaultModel 获取默认模型
-	DefaultModel() einoModel.ChatModel
+	DefaultModel() einoModel.BaseChatModel
 	// GetModelPool 获取模型池
 	GetModelPool(ctx context.Context, names []string) ([]*ModelWithMetadata, error)
 	// MarkModelUnavailable 标记模型为不可用
