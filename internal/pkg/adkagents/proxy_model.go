@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino/components/model"
+	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"k8s.io/klog/v2"
 )
@@ -30,7 +30,7 @@ func NewProxyChatModel(provider *EnhancedModelProviderImpl, modelNames []string)
 }
 
 // Generate 实现 model.ChatModel 接口
-func (p *ProxyChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+func (p *ProxyChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...einoModel.Option) (*schema.Message, error) {
 	result, err := p.executeWithRetry(ctx, input, opts, func(model *ModelWithMetadata) (any, error) {
 		return model.ChatModel.Generate(ctx, input, opts...)
 	})
@@ -46,7 +46,7 @@ func (p *ProxyChatModel) Generate(ctx context.Context, input []*schema.Message, 
 }
 
 // Stream 实现 model.ChatModel 接口
-func (p *ProxyChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+func (p *ProxyChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...einoModel.Option) (*schema.StreamReader[*schema.Message], error) {
 	result, err := p.executeWithRetry(ctx, input, opts, func(model *ModelWithMetadata) (any, error) {
 		return model.ChatModel.Stream(ctx, input, opts...)
 	})
@@ -65,7 +65,7 @@ func (p *ProxyChatModel) Stream(ctx context.Context, input []*schema.Message, op
 func (p *ProxyChatModel) executeWithRetry(
 	ctx context.Context,
 	input []*schema.Message,
-	opts []model.Option,
+	opts []einoModel.Option,
 	executor func(model *ModelWithMetadata) (any, error),
 ) (any, error) {
 	const maxAttempts = 3
@@ -129,8 +129,28 @@ func (p *ProxyChatModel) executeWithRetry(
 				model.APIKeyName, attempt+1, maxAttempts)
 		}
 
-		// 3. 绑定工具
-		p.toolBinder.BindToModel(&model.ChatModel)
+		// 3. 将已登记的工具绑定到本次使用的模型实例
+		// 修复说明：原实现 `p.toolBinder.BindToModel(&model.ChatModel)` 传入接口指针，
+		// 类型断言永远不命中 `ToolBindable`，导致 tools 实际没有传给模型，Agent 无法调用工具。
+		// 改用 Eino 标准 `WithTools` 接口：返回带 tools 的新实例，替换本次调用目标。
+		if toolInfos := p.toolBinder.GetTools(); len(toolInfos) > 0 {
+			if tcm, ok := model.ChatModel.(einoModel.ToolCallingChatModel); ok {
+				withTools, bindErr := tcm.WithTools(toolInfos)
+				if bindErr != nil {
+					klog.Warningf("ProxyChatModel: failed to bind tools to model [%s]: %v", model.APIKeyName, bindErr)
+				} else {
+					model = &ModelWithMetadata{
+						ChatModel:  withTools,
+						APIKeyName: model.APIKeyName,
+						APIKeyID:   model.APIKeyID,
+						LLMModel:   model.LLMModel,
+					}
+					klog.V(6).Infof("ProxyChatModel: bound %d tools to model [%s]", len(toolInfos), model.APIKeyName)
+				}
+			} else {
+				klog.V(6).Infof("ProxyChatModel: model [%s] is not ToolCallingChatModel, tools not bound", model.APIKeyName)
+			}
+		}
 
 		// 4. 执行请求
 		result, err := executor(model)
@@ -257,7 +277,7 @@ func (p *ProxyChatModel) BindTools(tools []*schema.ToolInfo) error {
 }
 
 // WithTools 适配 model.ToolCallingChatModel 接口
-func (p *ProxyChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+func (p *ProxyChatModel) WithTools(tools []*schema.ToolInfo) (einoModel.ToolCallingChatModel, error) {
 	p.BindTools(tools)
 	return p, nil
 }

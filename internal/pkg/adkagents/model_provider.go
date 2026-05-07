@@ -39,7 +39,7 @@ func NewEnhancedModelProvider(
 }
 
 // GetModel 获取指定名称的模型
-func (p *EnhancedModelProviderImpl) GetModel(name string) (einoModel.ChatModel, error) {
+func (p *EnhancedModelProviderImpl) GetModel(name string) (einoModel.BaseChatModel, error) {
 	klog.V(6).Infof("EnhancedModelProvider.GetModel: name=%s", name)
 
 	// 如果 name 为空，尝试使用数据库中的最高优先级模型
@@ -82,7 +82,7 @@ func (p *EnhancedModelProviderImpl) GetModel(name string) (einoModel.ChatModel, 
 
 // DefaultModel 获取默认模型
 // 不再提供默认模型，直接从数据库获取最高优先级的模型
-func (p *EnhancedModelProviderImpl) DefaultModel() einoModel.ChatModel {
+func (p *EnhancedModelProviderImpl) DefaultModel() einoModel.BaseChatModel {
 	apiKey, err := p.apiKeyRepo.GetHighestPriority(context.Background())
 	if err != nil || apiKey == nil {
 		klog.Errorf("EnhancedModelProvider.DefaultModel: no available model in database")
