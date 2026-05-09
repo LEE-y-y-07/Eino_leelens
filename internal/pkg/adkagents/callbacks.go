@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/callbacks"
@@ -24,6 +25,7 @@ type EinoCallbacks struct {
 	logLevel     klog.Level           // 日志级别 (0=关闭, 4=错误, 6=信息, 8=调试)
 	startTimes   map[string]time.Time // 记录各节点开始时间
 	callSequence int                  // 调用序列号
+	mu           sync.Mutex           // 保护 startTimes 与 callSequence —— Eino 会并行执行 tool calls，多 goroutine 并发读写会触发 fatal: concurrent map read and map write
 }
 
 // NewEinoCallbacks 创建新的 Eino 回调处理器
@@ -55,12 +57,15 @@ func (ec *EinoCallbacks) onStart(ctx context.Context, info *callbacks.RunInfo, i
 		return ctx
 	}
 
+	ec.mu.Lock()
 	ec.callSequence++
+	seq := ec.callSequence
 	nodeKey := ec.nodeKey(info)
 	ec.startTimes[nodeKey] = time.Now()
+	ec.mu.Unlock()
 
 	klog.V(6).InfoS("[EinoCallback] 节点开始执行",
-		"sequence", ec.callSequence,
+		"sequence", seq,
 		"component", info.Component,
 		"type", info.Type,
 		"name", info.Name,
@@ -86,7 +91,12 @@ func (ec *EinoCallbacks) onEnd(ctx context.Context, info *callbacks.RunInfo, out
 	}
 
 	nodeKey := ec.nodeKey(info)
+	ec.mu.Lock()
 	startTime, exists := ec.startTimes[nodeKey]
+	if exists {
+		delete(ec.startTimes, nodeKey)
+	}
+	ec.mu.Unlock()
 	duration := time.Since(startTime)
 	if !exists {
 		duration = 0
@@ -109,7 +119,6 @@ func (ec *EinoCallbacks) onEnd(ctx context.Context, info *callbacks.RunInfo, out
 		ec.logGenericOutput(output, info)
 	}
 
-	delete(ec.startTimes, nodeKey)
 	return ctx
 }
 
@@ -120,7 +129,12 @@ func (ec *EinoCallbacks) onError(ctx context.Context, info *callbacks.RunInfo, e
 	}
 
 	nodeKey := ec.nodeKey(info)
+	ec.mu.Lock()
 	startTime, exists := ec.startTimes[nodeKey]
+	if exists {
+		delete(ec.startTimes, nodeKey)
+	}
+	ec.mu.Unlock()
 	duration := time.Since(startTime)
 	if !exists {
 		duration = 0
@@ -133,7 +147,6 @@ func (ec *EinoCallbacks) onError(ctx context.Context, info *callbacks.RunInfo, e
 		"duration_ms", duration.Milliseconds(),
 	)
 
-	delete(ec.startTimes, nodeKey)
 	return ctx
 }
 
@@ -462,9 +475,13 @@ func (ec *EinoCallbacks) SetEnabled(enabled bool) {
 // GetStats 获取回调统计信息
 // 返回当前正在执行的节点数和已完成的调用次数
 func (ec *EinoCallbacks) GetStats() map[string]interface{} {
+	ec.mu.Lock()
+	running := len(ec.startTimes)
+	total := ec.callSequence
+	ec.mu.Unlock()
 	return map[string]interface{}{
 		"enabled":       ec.enabled,
-		"running_nodes": len(ec.startTimes),
-		"total_calls":   ec.callSequence,
+		"running_nodes": running,
+		"total_calls":   total,
 	}
 }

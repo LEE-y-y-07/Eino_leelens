@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -564,6 +566,12 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 	}
 
 	for _, msg := range historyMsgs {
+		// 跳过本轮刚创建、内容尚为空的 assistant 占位消息 ——
+		// 否则发给 Claude (Bedrock) 时尾巴是 assistant 消息，会被拒
+		// "This model does not support assistant message prefill. The conversation must end with a user message."
+		if msg.MessageID == assistantMsg.MessageID {
+			continue
+		}
 		if msg.Status == "completed" || msg.Status == "streaming" {
 			role := schema.User
 			if msg.Role == "assistant" {
@@ -576,8 +584,13 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 		}
 	}
 
-	// 创建Runner并执行
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent})
+	// 创建Runner并执行 — 启用流式
+	// 历史背景：之前关掉是因为走 OpenAI 兼容协议时，中继(Bedrock claude→OpenAI 转换)在并行
+	// tool_calls 的 chunk 上把 Index 都标成 0，导致 Eino concatToolCalls 把不同 tool 的 args
+	// 错拼成一团。改用 Anthropic 原生协议(provider=anthropic)后，原生消息流里每个 content_block
+	// 都带正确的 block_index，并行 tool 调用可以正确区分，于是流式重新可用。
+	// OpenAI 兼容协议(GLM/DeepSeek 等)同样走流式 —— 那些模型一般不并行 tool 调用，不会触发 bug。
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true})
 	iter := runner.Run(ctx, adkMessages)
 
 	var fullContent string
@@ -624,49 +637,144 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 				continue
 			}
 
-			content := event.Output.MessageOutput.Message.Content
-			// 对非 final 开头的 assistant 消息，自动添加 thinking 包裹
-			if event.Output.MessageOutput.Role == "assistant" && len(strings.TrimSpace(content)) > 0 && !strings.HasPrefix(content, "<final>") && !strings.HasPrefix(content, "<thinking>") {
-				content = "<thinking>" + content + "</thinking>"
-			}
-			if content != "" {
-				// 检查是否已发送过相同内容，避免重复
-				if !sentContents[content] {
-					sentContents[content] = true
-					// 发送内容增量
+			// 流式分支：逐 chunk 推送 delta，让前端有真正的"打字机"体验
+			if event.Output.MessageOutput.IsStreaming && event.Output.MessageOutput.MessageStream != nil {
+				stream := event.Output.MessageOutput.MessageStream
+				var streamFullContent string
+				var collectedToolCalls []schema.ToolCall
+				for {
+					chunk, err := stream.Recv()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						klog.ErrorS(err, "MessageStream.Recv 失败")
+						break
+					}
+					if chunk == nil {
+						continue
+					}
+					// 累积 tool_calls（每个 chunk 可能携带工具调用增量片段，最终一起处理）
+					if len(chunk.ToolCalls) > 0 {
+						collectedToolCalls = append(collectedToolCalls, chunk.ToolCalls...)
+					}
+					delta := chunk.Content
+					if delta == "" {
+						continue
+					}
+					// 流式增量发送
 					client.sendEvent(ServerMessage{
 						Type:      "content_delta",
 						ID:        assistantMsg.MessageID,
 						Timestamp: time.Now().UnixMilli(),
 						Payload: map[string]interface{}{
 							"message_id": assistantMsg.MessageID,
-							"delta":      content,
+							"delta":      delta,
 						},
 					})
-					fullContent += content
-					// 更新数据库中的消息内容
+					streamFullContent += delta
+					fullContent += delta
+					// 周期性写库（避免每 chunk 都写）—— 简单起见这里每块都写，
+					// 因为 SQLite 单写者足够 chunk 频率
 					h.chatService.UpdateMessageContent(ctx, assistantMsg.MessageID, fullContent)
 				}
+				stream.Close()
 
-			}
+				// 把流式收完的整段内容登记到去重表 ——
+				// ADK runner 在 EnableStreaming=true 下，可能在流结束后又发一个 IsStreaming=false
+				// 的 consolidated 事件（同样的内容整段重发），它原本是给非流式 caller 的便利，
+				// 我们已经在 streaming 分支处理过了，必须在非流式分支跳掉，否则内容会写两份。
+				if streamFullContent != "" {
+					sentContents[streamFullContent] = true
+				}
 
-			// 处理工具调用
-			if len(event.Output.MessageOutput.Message.ToolCalls) > 0 {
-				for _, tc := range event.Output.MessageOutput.Message.ToolCalls {
-					// 发送工具调用事件
-					client.sendEvent(ServerMessage{
-						Type:      "tool_call",
-						ID:        generateEventID(),
-						Timestamp: time.Now().UnixMilli(),
-						Payload: map[string]interface{}{
-							"tool_call_id": tc.ID,
-							"tool_name":    tc.Function.Name,
-							"arguments":    tc.Function.Arguments,
-						},
-					})
+				// chat_assistant agent 约定最终答案以 </final> 结束，</final> 之后不应再有任何字符。
+				// ADK runner 在 EnableStreaming 模式偶尔会在流结束后再发一个等价 stream/consolidated 事件 ——
+				// 用 </final> 作为业务级"我说完了"信号提前 break，可以彻底规避内容被写两遍的问题。
+				if strings.Contains(streamFullContent, "</final>") {
+					goto streamingDone
+				}
 
-					// 保存工具调用到数据库
-					h.chatService.CreateOrUpdateToolCall(ctx, assistantMsg.MessageID, tc.ID, tc.Function.Name, tc.Function.Arguments)
+				// 流结束后批量发出工具调用事件
+				if len(collectedToolCalls) > 0 {
+					// 同 ID 的 tool_call 在不同 chunk 上可能被切分（function.Arguments 为 JSON 流片段），
+					// 通过 ID 合并 arguments
+					merged := make(map[string]*schema.ToolCall)
+					order := make([]string, 0, len(collectedToolCalls))
+					for i := range collectedToolCalls {
+						tc := collectedToolCalls[i]
+						if existing, ok := merged[tc.ID]; ok {
+							existing.Function.Arguments += tc.Function.Arguments
+							if existing.Function.Name == "" {
+								existing.Function.Name = tc.Function.Name
+							}
+						} else {
+							copy := tc
+							merged[tc.ID] = &copy
+							order = append(order, tc.ID)
+						}
+					}
+					for _, id := range order {
+						tc := merged[id]
+						client.sendEvent(ServerMessage{
+							Type:      "tool_call",
+							ID:        generateEventID(),
+							Timestamp: time.Now().UnixMilli(),
+							Payload: map[string]interface{}{
+								"tool_call_id": tc.ID,
+								"tool_name":    tc.Function.Name,
+								"arguments":    tc.Function.Arguments,
+							},
+						})
+						h.chatService.CreateOrUpdateToolCall(ctx, assistantMsg.MessageID, tc.ID, tc.Function.Name, tc.Function.Arguments)
+					}
+				}
+			} else {
+				// 非流式分支（保留原逻辑作为兜底）
+				content := event.Output.MessageOutput.Message.Content
+				// 对非 final 开头的 assistant 消息，自动添加 thinking 包裹
+				if event.Output.MessageOutput.Role == "assistant" && len(strings.TrimSpace(content)) > 0 && !strings.HasPrefix(content, "<final>") && !strings.HasPrefix(content, "<thinking>") {
+					content = "<thinking>" + content + "</thinking>"
+				}
+				if content != "" {
+					// 检查是否已发送过相同内容，避免重复
+					if !sentContents[content] {
+						sentContents[content] = true
+						// 发送内容增量
+						client.sendEvent(ServerMessage{
+							Type:      "content_delta",
+							ID:        assistantMsg.MessageID,
+							Timestamp: time.Now().UnixMilli(),
+							Payload: map[string]interface{}{
+								"message_id": assistantMsg.MessageID,
+								"delta":      content,
+							},
+						})
+						fullContent += content
+						// 更新数据库中的消息内容
+						h.chatService.UpdateMessageContent(ctx, assistantMsg.MessageID, fullContent)
+					}
+
+				}
+
+				// 处理工具调用
+				if len(event.Output.MessageOutput.Message.ToolCalls) > 0 {
+					for _, tc := range event.Output.MessageOutput.Message.ToolCalls {
+						// 发送工具调用事件
+						client.sendEvent(ServerMessage{
+							Type:      "tool_call",
+							ID:        generateEventID(),
+							Timestamp: time.Now().UnixMilli(),
+							Payload: map[string]interface{}{
+								"tool_call_id": tc.ID,
+								"tool_name":    tc.Function.Name,
+								"arguments":    tc.Function.Arguments,
+							},
+						})
+
+						// 保存工具调用到数据库
+						h.chatService.CreateOrUpdateToolCall(ctx, assistantMsg.MessageID, tc.ID, tc.Function.Name, tc.Function.Arguments)
+					}
 				}
 			}
 		}
@@ -676,6 +784,7 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 			break
 		}
 	}
+streamingDone:
 	// 发送后清空去重 map，避免无限增长
 	sentContents = make(map[string]bool)
 	// 完成消息

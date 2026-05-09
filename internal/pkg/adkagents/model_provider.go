@@ -2,6 +2,7 @@ package adkagents
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/claude"
@@ -150,10 +151,15 @@ func (p *EnhancedModelProviderImpl) createChatModel(apiKey *model.APIKey) (*Mode
 
 // createOpenAIChatModel 创建 OpenAI 兼容的 ChatModel
 func (p *EnhancedModelProviderImpl) createOpenAIChatModel(apiKey *model.APIKey) (*ModelWithMetadata, error) {
+	// 复用 robust transport ——
+	// 没这个的话,OpenAI 兼容 client 默认 transport 没任何超时,网关半挂死/响应头不到来时整个调用会卡死。
+	// 我们之前 GLM/DeepSeek 卡住的根因就在这。统一加上分项超时。
+	httpClient := &http.Client{Transport: newRobustTransport()}
 	openaiConfig := &openai.ChatModelConfig{
-		BaseURL: apiKey.BaseURL,
-		APIKey:  apiKey.APIKey,
-		Model:   apiKey.Model,
+		BaseURL:    apiKey.BaseURL,
+		APIKey:     apiKey.APIKey,
+		Model:      apiKey.Model,
+		HTTPClient: httpClient,
 	}
 
 	chatModel, err := openai.NewChatModel(context.Background(), openaiConfig)
@@ -209,6 +215,16 @@ func (p *EnhancedModelProviderImpl) MarkModelUnavailable(ctx context.Context, mo
 
 	klog.Warningf("EnhancedModelProvider.MarkModelUnavailable: marked model %s as unavailable, reset at %v", modelName, resetTime)
 	return nil
+}
+
+// GetRateLimitResetAt 查询某个 key 当前的 rate-limit 解冻时间
+// 用于在所有 key 都被标 rate-limit-unavailable 时，决定等待到何时再重试
+func (p *EnhancedModelProviderImpl) GetRateLimitResetAt(ctx context.Context, modelName string) (time.Time, bool) {
+	apiKey, err := p.apiKeyRepo.GetByName(ctx, modelName)
+	if err != nil || apiKey == nil || apiKey.RateLimitResetAt == nil {
+		return time.Time{}, false
+	}
+	return *apiKey.RateLimitResetAt, true
 }
 
 // GetNextModel 获取下一个可用模型
