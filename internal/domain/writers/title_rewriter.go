@@ -18,10 +18,11 @@ type titleRewriter struct {
 	factory  *adkagents.AgentFactory
 	docRepo  repository.DocumentRepository
 	taskRepo repository.TaskRepository
+	repoRepo repository.RepoRepository
 }
 
 // NewTitleRewriter 创建标题重写服务
-func NewTitleRewriter(cfg *config.Config, docRepo repository.DocumentRepository, taskRepo repository.TaskRepository) (*titleRewriter, error) {
+func NewTitleRewriter(cfg *config.Config, docRepo repository.DocumentRepository, taskRepo repository.TaskRepository, repoRepo repository.RepoRepository) (*titleRewriter, error) {
 
 	klog.V(6).Infof("[TitleRewriter] 创建服务")
 	factory, err := adkagents.NewAgentFactory(cfg)
@@ -33,6 +34,7 @@ func NewTitleRewriter(cfg *config.Config, docRepo repository.DocumentRepository,
 		factory:  factory,
 		docRepo:  docRepo,
 		taskRepo: taskRepo,
+		repoRepo: repoRepo,
 	}, nil
 }
 
@@ -64,7 +66,7 @@ func (s *titleRewriter) Generate(ctx context.Context, localPath string, title st
 	klog.V(6).Infof("[%s] 当前标题: %s", s.Name(), oldTitle)
 
 	// 2. 调用 Agent
-	agent, err := s.factory.Manager.CreateAgent(domain.AgentTitleRewriter)
+	agent, err := s.factory.Manager.CreateAgent(pickAgent(domain.AgentTitleRewriter, lookupRepoModeByTaskID(s.taskRepo, s.repoRepo, taskID)))
 	if err != nil {
 		klog.Errorf("[%s] 创建 Agent '%s' 失败: %v", s.Name(), domain.AgentTitleRewriter, err)
 		return "", fmt.Errorf("create agent failed: %w", err)

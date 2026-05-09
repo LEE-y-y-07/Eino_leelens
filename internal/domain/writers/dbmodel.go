@@ -18,9 +18,10 @@ type dbModelWriter struct {
 	factory  *adkagents.AgentFactory
 	hintRepo repository.HintRepository
 	taskRepo repository.TaskRepository
+	repoRepo repository.RepoRepository
 }
 
-func NewDBModelWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository) (*dbModelWriter, error) {
+func NewDBModelWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository, repoRepo repository.RepoRepository) (*dbModelWriter, error) {
 	klog.V(6).Infof("[NewDBModelWriter] 创建数据库模型解析服务")
 	factory, err := adkagents.NewAgentFactory(cfg)
 	if err != nil {
@@ -31,6 +32,7 @@ func NewDBModelWriter(cfg *config.Config, hintRepo repository.HintRepository, ta
 		factory:  factory,
 		hintRepo: hintRepo,
 		taskRepo: taskRepo,
+		repoRepo: repoRepo,
 	}, nil
 }
 
@@ -61,14 +63,15 @@ func (s *dbModelWriter) genDocument(ctx context.Context, localPath string, title
 	adk.AddSessionValue(ctx, "document_title", title)
 	adk.AddSessionValue(ctx, "task_id", taskID)
 
+	mode := lookupRepoModeByTaskID(s.taskRepo, s.repoRepo, taskID)
 	agent, err := adkagents.BuildSequentialAgent(
 		ctx,
 		s.factory,
 		"db_model_parser_sequential_agent",
 		"db model parser sequential agent - explore database models then validate markdown",
-		domain.AgentDBModelExplorer,
-		domain.AgentDocCheck,
-		domain.AgentMdCheck,
+		pickAgent(domain.AgentDBModelExplorer, mode),
+		pickAgent(domain.AgentDocCheck, mode),
+		pickAgent(domain.AgentMdCheck, mode),
 	)
 	if err != nil {
 		return "", fmt.Errorf("[%s] create agent failed: %w", s.Name(), err)

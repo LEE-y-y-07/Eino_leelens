@@ -18,10 +18,11 @@ type apiWriter struct {
 	factory  *adkagents.AgentFactory
 	hintRepo repository.HintRepository
 	taskRepo repository.TaskRepository
+	repoRepo repository.RepoRepository
 }
 
 // New 创建API接口分析服务实例。
-func NewAPIWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository) (*apiWriter, error) {
+func NewAPIWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository, repoRepo repository.RepoRepository) (*apiWriter, error) {
 	klog.V(6).Infof("[apianalyzer.New] 创建API接口分析服务")
 	factory, err := adkagents.NewAgentFactory(cfg)
 	if err != nil {
@@ -32,6 +33,7 @@ func NewAPIWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRe
 		factory:  factory,
 		hintRepo: hintRepo,
 		taskRepo: taskRepo,
+		repoRepo: repoRepo,
 	}, nil
 }
 
@@ -64,14 +66,15 @@ func (s *apiWriter) genDocument(ctx context.Context, localPath string, title str
 	adk.AddSessionValue(ctx, "document_title", title)
 	adk.AddSessionValue(ctx, "task_id", taskID)
 
+	mode := lookupRepoModeByTaskID(s.taskRepo, s.repoRepo, taskID)
 	agent, err := adkagents.BuildSequentialAgent(
 		ctx,
 		s.factory,
 		"api_parser_sequential_agent",
 		"api parser sequential agent - explore http APIs then validate document and markdown",
-		domain.AgentAPIExplorer,
-		domain.AgentDocCheck,
-		domain.AgentMdCheck,
+		pickAgent(domain.AgentAPIExplorer, mode),
+		pickAgent(domain.AgentDocCheck, mode),
+		pickAgent(domain.AgentMdCheck, mode),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create agent failed: %w", err)

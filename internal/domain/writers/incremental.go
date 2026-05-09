@@ -152,7 +152,7 @@ func (s *incrementalWriter) createIncrementalPlan(ctx context.Context, repo *mod
 		fmt.Fprintf(&docListStr, "- 标题=%s\t ID=%d\n", doc.Title, doc.ID)
 	}
 
-	result, err := s.genIncrementalPlan(ctx, repo.LocalPath, repo.CloneCommit, summary, docListStr.String())
+	result, err := s.genIncrementalPlan(ctx, repo.LocalPath, repo.CloneCommit, summary, docListStr.String(), repo.GenerationMode)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrAgentExecutionFailed, err)
 	}
@@ -163,7 +163,8 @@ func (s *incrementalWriter) createIncrementalPlan(ctx context.Context, repo *mod
 // genIncrementalPlan 生成增量更新计划。
 // summary 增量变更摘要
 // docList 当前仓库的所有文档的标题与ID列表
-func (s *incrementalWriter) genIncrementalPlan(ctx context.Context, localPath string, baseCommit string, summary string, docList string) (*domain.IncrementalGenerationResult, error) {
+// mode 生成模式 deep/light
+func (s *incrementalWriter) genIncrementalPlan(ctx context.Context, localPath string, baseCommit string, summary string, docList string, mode string) (*domain.IncrementalGenerationResult, error) {
 	adk.AddSessionValue(ctx, "local_path", localPath)
 	adk.AddSessionValue(ctx, "incremental_summary", summary)
 
@@ -172,8 +173,8 @@ func (s *incrementalWriter) genIncrementalPlan(ctx context.Context, localPath st
 		s.factory,
 		"incremental_analysis_sequential_agent",
 		"增量分析顺序执行 Agent - 先生成任务，再校验修正",
-		domain.AgentIncrementalEditor,
-		domain.AgentIncrementalChecker,
+		pickAgent(domain.AgentIncrementalEditor, mode),
+		pickAgent(domain.AgentIncrementalChecker, mode),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建顺序 Agent 失败: %w", err)

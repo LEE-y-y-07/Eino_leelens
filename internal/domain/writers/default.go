@@ -74,23 +74,13 @@ func (s *defaultWriter) genDocument(ctx context.Context, localPath string, title
 	adk.AddSessionValue(ctx, "task_id", taskID)
 
 	// 根据仓库的 generation_mode 决定使用哪一套 agent ——
-	// deep(默认): generator + markdown_checker + document_checker(3 个 LLM 链, 质量最高)
-	// light: generator + markdown_checker(2 个 LLM 链, 跳过最后那道 document_checker)
-	//        适配阿里千问 / 豆包 / GLM-air 这类中端模型 —— 速度比 deep 快,质量略降但仍有基本校验
+	// deep: leelens 定制版 generator + markdown_checker + document_checker
+	// light: 完全沿用 openDeepWiki 原版 prompt，同样 3 步链路（*_light yaml 等价于 openDeepWiki 默认 prompt）
 	mode := s.lookupRepoMode(taskID)
-	var agentNames []string
-	if mode == "light" {
-		agentNames = []string{
-			pickAgent(domain.AgentGen, mode),
-			pickAgent(domain.AgentCheck, mode),
-		}
-		klog.V(6).Infof("[%s] light 模式：跑 generator + markdown_checker (跳过 document_checker) - taskID=%d", s.Name(), taskID)
-	} else {
-		agentNames = []string{
-			pickAgent(domain.AgentGen, mode),
-			pickAgent(domain.AgentCheck, mode),
-			pickAgent(domain.AgentDocCheck, mode),
-		}
+	agentNames := []string{
+		pickAgent(domain.AgentGen, mode),
+		pickAgent(domain.AgentCheck, mode),
+		pickAgent(domain.AgentDocCheck, mode),
 	}
 
 	agent, err := adkagents.BuildSequentialAgent(

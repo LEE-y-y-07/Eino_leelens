@@ -109,15 +109,10 @@ func (s *tocWriter) createDirs(ctx context.Context, repo *model.Repository) (*do
 // generateTaskPlan 执行任务生成链路，返回解析后的任务列表结果。
 func (s *tocWriter) genDirList(ctx context.Context, localPath string, mode string) (*domain.DirMakerGenerationResult, error) {
 	adk.AddSessionValue(ctx, "local_path", localPath)
-	// light 模式只跑 toc_editor_light，跳过 toc_checker，节省一半 LLM 调用
-	var agentNames []string
-	if mode == "light" {
-		agentNames = []string{pickAgent(domain.AgentTocEditor, mode)}
-	} else {
-		agentNames = []string{
-			pickAgent(domain.AgentTocEditor, mode),
-			pickAgent(domain.AgentTocChecker, mode),
-		}
+	// deep/light 都跑 toc_editor → toc_checker 2 步；light 模式仅替换为 openDeepWiki 原版 prompt
+	agentNames := []string{
+		pickAgent(domain.AgentTocEditor, mode),
+		pickAgent(domain.AgentTocChecker, mode),
 	}
 	agent, err := adkagents.BuildSequentialAgent(
 		ctx,

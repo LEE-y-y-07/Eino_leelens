@@ -16,10 +16,12 @@ import (
 type userRequestWriter struct {
 	factory  *adkagents.AgentFactory
 	hintRepo repository.HintRepository
+	taskRepo repository.TaskRepository
+	repoRepo repository.RepoRepository
 }
 
 // New 创建问题分析服务实例。
-func NewUserRequestWriter(cfg *config.Config, hintRepo repository.HintRepository) (*userRequestWriter, error) {
+func NewUserRequestWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository, repoRepo repository.RepoRepository) (*userRequestWriter, error) {
 	klog.V(6).Infof("[writers.NewUserRequestWriter] 创建用户请求分析服务")
 	factory, err := adkagents.NewAgentFactory(cfg)
 	if err != nil {
@@ -29,6 +31,8 @@ func NewUserRequestWriter(cfg *config.Config, hintRepo repository.HintRepository
 	return &userRequestWriter{
 		factory:  factory,
 		hintRepo: hintRepo,
+		taskRepo: taskRepo,
+		repoRepo: repoRepo,
 	}, nil
 }
 
@@ -60,13 +64,14 @@ func (s *userRequestWriter) genDocument(ctx context.Context, localPath string, u
 	adk.AddSessionValue(ctx, "local_path", localPath)
 	adk.AddSessionValue(ctx, "task_id", taskID)
 
+	mode := lookupRepoModeByTaskID(s.taskRepo, s.repoRepo, taskID)
 	agent, err := adkagents.BuildSequentialAgent(
 		ctx,
 		s.factory,
 		"problem_solver_sequential_agent",
 		"problem solver sequential agent - analyze codebase to answer specific problem",
-		domain.AgentProblemSolver,
-		domain.AgentMdCheck,
+		pickAgent(domain.AgentProblemSolver, mode),
+		pickAgent(domain.AgentMdCheck, mode),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create agent failed: %w", err)

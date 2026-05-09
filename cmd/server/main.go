@@ -87,16 +87,16 @@ func main() {
 	chatService := service.NewChatService(chatSessionRepo, chatMessageRepo, chatToolCallRepo)
 
 	//初始化系列Writer
-	titleRewriter, err := writers.NewTitleRewriter(cfg, docRepo, taskRepo)
+	titleRewriter, err := writers.NewTitleRewriter(cfg, docRepo, taskRepo, repoRepo)
 	if err != nil {
 		log.Fatalf("Failed to initialize title rewriter service: %v", err)
 	}
-	docRewriter, err := writers.NewDocRewriter(cfg, docRepo, taskRepo)
+	docRewriter, err := writers.NewDocRewriter(cfg, docRepo, taskRepo, repoRepo)
 	if err != nil {
 		log.Fatalf("Failed to initialize doc rewriter service: %v", err)
 	}
 
-	userRequestWriter, err := writers.NewUserRequestWriter(cfg, hintRepo)
+	userRequestWriter, err := writers.NewUserRequestWriter(cfg, hintRepo, taskRepo, repoRepo)
 	if err != nil {
 		log.Fatalf("Failed to initialize user request writer service: %v", err)
 	}
@@ -104,11 +104,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize document generator service: %v", err)
 	}
-	dbModelWriter, err := writers.NewDBModelWriter(cfg, hintRepo, taskRepo)
+	dbModelWriter, err := writers.NewDBModelWriter(cfg, hintRepo, taskRepo, repoRepo)
 	if err != nil {
 		log.Fatalf("Failed to initialize db model writer service: %v", err)
 	}
-	apiWriter, err := writers.NewAPIWriter(cfg, hintRepo, taskRepo)
+	apiWriter, err := writers.NewAPIWriter(cfg, hintRepo, taskRepo, repoRepo)
 	if err != nil {
 		log.Fatalf("Failed to initialize api analyzer service: %v", err)
 	}

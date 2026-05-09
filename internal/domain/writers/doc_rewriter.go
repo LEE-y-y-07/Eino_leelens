@@ -18,10 +18,11 @@ type docRewriter struct {
 	factory  *adkagents.AgentFactory
 	docRepo  repository.DocumentRepository
 	taskRepo repository.TaskRepository
+	repoRepo repository.RepoRepository
 }
 
 // NewDocRewriter 创建文档内容重写服务
-func NewDocRewriter(cfg *config.Config, docRepo repository.DocumentRepository, taskRepo repository.TaskRepository) (*docRewriter, error) {
+func NewDocRewriter(cfg *config.Config, docRepo repository.DocumentRepository, taskRepo repository.TaskRepository, repoRepo repository.RepoRepository) (*docRewriter, error) {
 	klog.V(6).Infof("[DocRewriter] 创建服务")
 	factory, err := adkagents.NewAgentFactory(cfg)
 	if err != nil {
@@ -32,6 +33,7 @@ func NewDocRewriter(cfg *config.Config, docRepo repository.DocumentRepository, t
 		factory:  factory,
 		docRepo:  docRepo,
 		taskRepo: taskRepo,
+		repoRepo: repoRepo,
 	}, nil
 }
 
@@ -62,7 +64,7 @@ func (s *docRewriter) Generate(ctx context.Context, localPath string, title stri
 		return "", fmt.Errorf("rewrite guide is empty")
 	}
 
-	agent, err := s.factory.Manager.CreateAgent(domain.AgentDocRewriter)
+	agent, err := s.factory.Manager.CreateAgent(pickAgent(domain.AgentDocRewriter, lookupRepoModeByTaskID(s.taskRepo, s.repoRepo, taskID)))
 	if err != nil {
 		klog.Errorf("[%s] 创建 Agent '%s' 失败: %v", s.Name(), domain.AgentDocRewriter, err)
 		return "", fmt.Errorf("create agent failed: %w", err)

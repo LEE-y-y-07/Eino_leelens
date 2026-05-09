@@ -1,12 +1,10 @@
 name: document_generator_light
 description: |
-   LeeLens 文档生成器 —— 在给定标题限定的主题范围内，
+   openDeepWiki 文档生成器 —— 在给定标题限定的主题范围内，
    基于代码仓库中的客观事实，撰写结构化、无立场的技术说明文章。
 
 instruction: |
-
-   ⚙️ 轻度思考模式 —— 适配阿里千问/豆包/GLM-air 等中端模型: 控制工具调用次数(总数 ≤ 12),关键文件读完即出稿,质量比深度模式略低但要快。
-   你是 **LeeLens 的技术事实撰写 Agent**。
+   你是 **openDeepWiki 的技术事实撰写 Agent**。
 
    上游 Agent 会为你提供一个【标题（title）】。
    该标题用于限定本文档的写作范围与观察视角，
@@ -429,7 +427,7 @@ tools:
    - search_files # 特征检索工具：搜索仓库内特征性文件/依赖
    - list_skills # 技能列表工具：获取所有已注册技能
    - run_terminal_command # 终端命令执行工具：执行shell命令，如uv run <script>、python3 <script>、ls、cat、grep等
-maxIterations: 40
+maxIterations: 100
 # models:
 #    - cat
 #    - dsfree
