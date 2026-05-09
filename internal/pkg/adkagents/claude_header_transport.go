@@ -31,7 +31,7 @@ func newRobustTransport() *http.Transport {
 		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Minute,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 }
