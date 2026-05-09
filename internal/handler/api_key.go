@@ -160,8 +160,8 @@ func (h *APIKeyHandler) UpdateAPIKey(c *gin.Context) {
 		Name:     req.Name,
 		Provider: req.Provider,
 		BaseURL:  req.BaseURL,
-		// APIKey:   req.APIKey,
-		// Model:    req.Model,
+		APIKey:   req.APIKey, // 允许通过 PUT 修改 api_key 与 model（之前注释掉了，导致只能删除重建）
+		Model:    req.Model,
 		Priority: req.Priority,
 	})
 	if err != nil {

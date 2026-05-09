@@ -100,7 +100,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize user request writer service: %v", err)
 	}
-	defaultWriter, err := writers.NewDefaultWriter(cfg, hintRepo, taskRepo)
+	defaultWriter, err := writers.NewDefaultWriter(cfg, hintRepo, taskRepo, repoRepo)
 	if err != nil {
 		log.Fatalf("Failed to initialize document generator service: %v", err)
 	}
@@ -138,9 +138,11 @@ func main() {
 	incrementalWriter.SetTaskService(taskService)
 
 	// 初始化全局任务编排器
-	// maxWorkers=2，避免并发过多打爆CPU/LLM配额
+	// maxWorkers=4：与 LLM 网关并发能力匹配，让多篇 doc 并行生成。
+	// 强模型(sonnet/gpt/DeepSeek-V4)能轻松扛 4 并发,中端国产模型(qwen-turbo/豆包/GLM-air)
+	// 在 light 模式下也能扛 —— light 模式 prompt 限制了工具调用次数,实际 LLM 调用量适中。
 	taskExecutor := &taskExecutorAdapter{taskService: taskService}
-	orchestrator.InitGlobalOrchestrator(1, taskExecutor)
+	orchestrator.InitGlobalOrchestrator(4, taskExecutor)
 	taskService.SetOrchestrator(orchestrator.GetGlobalOrchestrator())
 	defer orchestrator.ShutdownGlobalOrchestrator()
 
@@ -221,6 +223,23 @@ func main() {
 	// 启动时清理卡住的任务（超过 10 分钟的运行中任务）
 	cleanupStuckTasks(taskService)
 	taskService.StartPendingTaskScheduler(context.Background(), 10*time.Second)
+
+	// 定期清理卡住任务（运行时也需要兜底，否则单次 LLM hang 会让任务永远卡 running）
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		// 20min 阈值：给 sonnet/glm 这类带大上下文的慢模型足够推理时间，
+		// 同时配合 LLM HTTP 层的 ResponseHeaderTimeout=60s（catch 网关半挂死）+
+		// cleanup 自动重试预算 3 次，构成兜底链：网关挂 -> HTTP 60s 失败 -> 任务报错 ->
+		// 若任务真挂(20min 无终止) -> cleanup 强制 fail -> 自动重试 -> 最多 3 次后才永久 failed
+		for range ticker.C {
+			if affected, err := taskService.CleanupStuckTasks(20 * time.Minute); err != nil {
+				klog.Warningf("周期清理卡住任务失败: %v", err)
+			} else if affected > 0 {
+				klog.V(6).Infof("周期清理：处理了 %d 个卡住任务", affected)
+			}
+		}
+	}()
 
 	// 设置路由
 	r := router.Setup(cfg, repoHandler, taskHandler, docHandler, apiKeyHandler, syncHandler, userRequestHandler, openAPIHandler, activityHandler, agentHandler, chatHandler)

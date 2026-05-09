@@ -56,6 +56,8 @@ func NewTaskService(cfg *config.Config, taskRepo repository.TaskRepository, repo
 	s.queryService = NewTaskQueryService(taskRepo)
 	s.lifecycle = NewTaskLifecycleService(taskRepo, repoRepo)
 	s.cleanupService = NewTaskCleanupService(taskRepo, s.lifecycle)
+	// 注入自动重试回调 —— 卡住任务会在重试预算内被自动重新排队
+	s.cleanupService.SetRetryFn(s.Retry)
 
 	return s
 }
