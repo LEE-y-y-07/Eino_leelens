@@ -147,7 +147,7 @@ info:
   version: 1.0.0
   contact:
     name: LeeLens
-    url: https://github.com/weibaohui/leelens
+    url: https://gitee.com/li-yuyanglee/leelens
 
 servers:
   - url: http://localhost:8080

@@ -79,7 +79,7 @@ func (s *tocWriter) Generate(ctx context.Context, localPath string, title string
 		}
 	}
 	// result.AnalysisSummary 保存到提示中
-	if err := s.saveAnalysisSummaryHint(repo.ID, result.AnalysisSummary); err != nil {
+	if err := s.saveAnalysisSummaryHint(repo.ID, string(result.AnalysisSummary)); err != nil {
 		klog.Errorf("[%s] 保存目录分析总结提示信息失败: repoID=%d, error=%v", s.Name(), repo.ID, err)
 	}
 
@@ -96,7 +96,7 @@ func (s *tocWriter) createDirs(ctx context.Context, repo *model.Repository) (*do
 		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidLocalPath, err)
 	}
 
-	result, err := s.genDirList(ctx, repo.LocalPath)
+	result, err := s.genDirList(ctx, repo.LocalPath, repo.GenerationMode)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrAgentExecutionFailed, err)
 	}
@@ -107,15 +107,24 @@ func (s *tocWriter) createDirs(ctx context.Context, repo *model.Repository) (*do
 }
 
 // generateTaskPlan 执行任务生成链路，返回解析后的任务列表结果。
-func (s *tocWriter) genDirList(ctx context.Context, localPath string) (*domain.DirMakerGenerationResult, error) {
+func (s *tocWriter) genDirList(ctx context.Context, localPath string, mode string) (*domain.DirMakerGenerationResult, error) {
 	adk.AddSessionValue(ctx, "local_path", localPath)
+	// light 模式只跑 toc_editor_light，跳过 toc_checker，节省一半 LLM 调用
+	var agentNames []string
+	if mode == "light" {
+		agentNames = []string{pickAgent(domain.AgentTocEditor, mode)}
+	} else {
+		agentNames = []string{
+			pickAgent(domain.AgentTocEditor, mode),
+			pickAgent(domain.AgentTocChecker, mode),
+		}
+	}
 	agent, err := adkagents.BuildSequentialAgent(
 		ctx,
 		s.factory,
 		"toc_generator_sequential_agent",
-		"目录制定者顺序执行 Agent - 先生成目录，再校验修正",
-		domain.AgentTocEditor,
-		domain.AgentTocChecker,
+		"目录制定者顺序执行 Agent",
+		agentNames...,
 	)
 
 	initialMessage := fmt.Sprintf(`请帮我分析这个代码仓库，并生成需要的技术分析任务列表。

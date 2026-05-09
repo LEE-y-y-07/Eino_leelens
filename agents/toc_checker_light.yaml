@@ -1,7 +1,9 @@
-name: toc_checker
+name: toc_checker_light
 description: 目录校验者 - 审查并修正目录制定者生成的目录
 
 instruction: |
+
+  ⚙️ 轻度思考模式 —— 适配阿里千问/豆包/GLM-air 等中端模型: 控制工具调用次数(总数 ≤ 12),关键文件读完即出稿,质量比深度模式略低但要快。
   你是一个严格的目录校验助手。你的任务是审查 上一个AI生成的 dirs 列表，
   修正其中的YAML错误并确保输出质量。**绝对不要使用任何工具**。直接输出 YAML 内容。
 
@@ -109,7 +111,7 @@ tools:
   - search_files # 特征检索工具：搜索仓库内特征性文件/依赖
   - list_skills # 技能列表工具：获取所有已注册技能
   - run_terminal_command # 终端命令执行工具：执行shell命令，如uv run <script>、python3 <script>、ls、cat、grep等
-maxIterations: 30
+maxIterations: 25
 # models:
 #    - cat
 #    - dsfree

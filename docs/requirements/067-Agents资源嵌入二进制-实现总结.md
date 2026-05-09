@@ -143,7 +143,7 @@ make build
 
 ```bash
 # 1. 下载对应平台二进制
-wget https://github.com/weibaohui/LeeLens/releases/download/vx.x.x/leelens-linux-amd64
+wget https://gitee.com/li-yuyanglee/leelens/releases/download/vx.x.x/leelens-linux-amd64
 
 # 2. 添加执行权限
 chmod +x leelens-linux-amd64

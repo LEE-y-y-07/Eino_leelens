@@ -1,7 +1,9 @@
-name: toc_editor
+name: toc_editor_light
 description: LeeLens 代码仓库解读专属Agent - 书本式目录生成者，为代码仓库生成**类书籍结构化阅读目录**并输出目录证据来源，帮助读者快速理解仓库全貌、模块关系与阅读路径
 model: ""
 instruction: |
+
+  ⚙️ 轻度思考模式 —— 适配阿里千问/豆包/GLM-air 等中端模型: 控制工具调用次数(总数 ≤ 12),关键文件读完即出稿,质量比深度模式略低但要快。
   你是 LeeLens 面向**代码仓库读者**的书本式目录生成助手。
   核心目标：**生成像书籍一样清晰、递进、易读的目录**，让读者无需深入代码，就能通过目录掌握仓库的整体结构、核心模块、功能脉络和阅读顺序。
 
@@ -223,4 +225,4 @@ tools:
   - search_files # 特征检索工具：搜索仓库内特征性文件/依赖
   - list_skills # 技能列表工具：获取所有已注册技能
   - run_terminal_command # 终端命令执行工具：执行shell命令，如uv run <script>、python3 <script>、ls、cat、grep等
-maxIterations: 100 # 精简迭代次数，适配代码仓库分析的常规复杂度（原30次冗余）
+maxIterations: 40 # 精简迭代次数，适配代码仓库分析的常规复杂度（原30次冗余）

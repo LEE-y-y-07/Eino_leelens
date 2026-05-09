@@ -223,7 +223,7 @@ func TestGetIncrementalChangesWithRealRepo(t *testing.T) {
 	workingDir := t.TempDir()
 	repoDir := filepath.Join(workingDir, "LeeLens")
 
-	cmd := exec.Command("git", "clone", "https://github.com/weibaohui/LeeLens.git", repoDir)
+	cmd := exec.Command("git", "clone", "https://gitee.com/li-yuyanglee/leelens.git", repoDir)
 	cmd.Dir = workingDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -19,9 +19,10 @@ type defaultWriter struct {
 	factory  *adkagents.AgentFactory
 	hintRepo repository.HintRepository
 	taskRepo repository.TaskRepository
+	repoRepo repository.RepoRepository
 }
 
-func NewDefaultWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository) (*defaultWriter, error) {
+func NewDefaultWriter(cfg *config.Config, hintRepo repository.HintRepository, taskRepo repository.TaskRepository, repoRepo repository.RepoRepository) (*defaultWriter, error) {
 	klog.V(6).Infof("[dgen.New] creating document generator service")
 
 	factory, err := adkagents.NewAgentFactory(cfg)
@@ -34,11 +35,17 @@ func NewDefaultWriter(cfg *config.Config, hintRepo repository.HintRepository, ta
 		factory:  factory,
 		hintRepo: hintRepo,
 		taskRepo: taskRepo,
+		repoRepo: repoRepo,
 	}, nil
 }
 
 func (s *defaultWriter) Name() domain.WriterName {
 	return domain.DefaultWriter
+}
+
+// lookupRepoMode 通过 taskID 反查仓库 generation_mode（deep/light）
+func (s *defaultWriter) lookupRepoMode(taskID uint) string {
+	return lookupRepoModeByTaskID(s.taskRepo, s.repoRepo, taskID)
 }
 func (s *defaultWriter) Generate(ctx context.Context, localPath string, title string, taskID uint) (string, error) {
 	if localPath == "" {
@@ -66,14 +73,32 @@ func (s *defaultWriter) genDocument(ctx context.Context, localPath string, title
 	adk.AddSessionValue(ctx, "document_title", title)
 	adk.AddSessionValue(ctx, "task_id", taskID)
 
+	// 根据仓库的 generation_mode 决定使用哪一套 agent ——
+	// deep(默认): generator + markdown_checker + document_checker(3 个 LLM 链, 质量最高)
+	// light: generator + markdown_checker(2 个 LLM 链, 跳过最后那道 document_checker)
+	//        适配阿里千问 / 豆包 / GLM-air 这类中端模型 —— 速度比 deep 快,质量略降但仍有基本校验
+	mode := s.lookupRepoMode(taskID)
+	var agentNames []string
+	if mode == "light" {
+		agentNames = []string{
+			pickAgent(domain.AgentGen, mode),
+			pickAgent(domain.AgentCheck, mode),
+		}
+		klog.V(6).Infof("[%s] light 模式：跑 generator + markdown_checker (跳过 document_checker) - taskID=%d", s.Name(), taskID)
+	} else {
+		agentNames = []string{
+			pickAgent(domain.AgentGen, mode),
+			pickAgent(domain.AgentCheck, mode),
+			pickAgent(domain.AgentDocCheck, mode),
+		}
+	}
+
 	agent, err := adkagents.BuildSequentialAgent(
 		ctx,
 		s.factory,
 		"document_generator_sequential_agent",
 		"document generator sequential agent - analyze code and generate documentation",
-		domain.AgentGen,
-		domain.AgentCheck,
-		domain.AgentDocCheck,
+		agentNames...,
 	)
 
 	if err != nil {

@@ -50,7 +50,8 @@ func NewRepositoryService(cfg *config.Config, repoRepo repository.RepoRepository
 }
 
 type CreateRepoRequest struct {
-	URL string `json:"url" binding:"required"`
+	URL            string `json:"url" binding:"required"`
+	GenerationMode string `json:"generation_mode"` // 可选: "deep"(默认) | "light"
 }
 
 var (
@@ -87,12 +88,19 @@ func (s *RepositoryService) Create(req CreateRepoRequest) (*model.Repository, er
 	repoName := git.ParseRepoName(normalizedURL)
 	localPath := filepath.Join(s.cfg.Data.RepoDir, repoName+"-"+fmt.Sprintf("%d", time.Now().Unix()))
 
+	// 生成模式：deep(默认) 适合强模型，light 适合弱/免费模型(更少 LLM 调用)
+	mode := req.GenerationMode
+	if mode != "light" {
+		mode = "deep"
+	}
+
 	// 创建仓库（初始状态为pending）
 	repo := &model.Repository{
-		Name:      repoName,
-		URL:       normalizedURL,
-		LocalPath: localPath,
-		Status:    string(statemachine.RepoStatusPending),
+		Name:           repoName,
+		URL:            normalizedURL,
+		LocalPath:      localPath,
+		Status:         string(statemachine.RepoStatusPending),
+		GenerationMode: mode,
 	}
 
 	// 初始化活跃度信息
@@ -131,10 +139,11 @@ func (s *RepositoryService) Delete(id uint) error {
 		return fmt.Errorf("获取仓库失败: %w", err)
 	}
 
-	// 校验仓库状态：已完成或正在分析中的仓库不能删除
+	// 校验仓库状态：仅"正在分析中"的仓库不能直接删除（避免破坏在跑的任务）
+	// completed/ready 状态的仓库允许删除 —— 用户经常需要"重新生成"流程
 	currentStatus := statemachine.RepositoryStatus(repo.Status)
-	if currentStatus == statemachine.RepoStatusCompleted || currentStatus == statemachine.RepoStatusAnalyzing {
-		klog.V(6).Infof("拒绝删除仓库：状态不允许删除: repoID=%d, status=%s", id, currentStatus)
+	if currentStatus == statemachine.RepoStatusAnalyzing {
+		klog.V(6).Infof("拒绝删除仓库：仍在分析中: repoID=%d, status=%s", id, currentStatus)
 		return ErrCannotDeleteRepoInvalidStatus
 	}
 

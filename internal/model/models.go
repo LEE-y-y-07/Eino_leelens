@@ -16,6 +16,7 @@ type Repository struct {
 	CloneCommit           string     `json:"clone_commit_id" gorm:"size:100"`
 	SizeMB                float64    `json:"size_mb" gorm:"default:0"`
 	Status                string     `json:"status" gorm:"size:50;default:pending"` // pending, cloning, ready, analyzing, completed, error
+	GenerationMode        string     `json:"generation_mode" gorm:"size:20;default:deep"` // deep | light —— deep 适合强模型(sonnet/gpt/qwen-max),内容丰富但调用次数多;light 适合弱模型(GLM 免费/小参数本地模型),减少 LLM 调用次数
 	ErrorMsg              string     `json:"error_msg" gorm:"size:1000"`
 	NextUpdateTime        *time.Time `json:"next_update_time,omitempty"`     // 下次更新时间（基于活跃度动态调整）
 	TodayActivityCount    int        `json:"today_activity_count,omitempty"`   // 今日活跃度点数

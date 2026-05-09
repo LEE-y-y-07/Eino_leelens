@@ -7,7 +7,7 @@ app = 'leelens'
 primary_region = 'sin'
 
 [build]
-  image = "ghcr.io/weibaohui/leelens:latest"
+  image = "gitee-registry.example.com/li-yuyanglee/leelens:latest"
 
 [http_service]
   internal_port = 8080
