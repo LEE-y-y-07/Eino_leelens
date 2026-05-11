@@ -1,6 +1,6 @@
 # LeeLens Backend
 
-> LeeLens 的 Go + Gin + Eino 后端服务。前端位于 [`../leelens-frontend`](../leelens-frontend)。
+> LeeLens 的 Go + Gin + Eino 后端服务，纯 API server。前端（Next.js）位于 [`../eino-lee-lens`](../eino-lee-lens)，独立部署。
 
 ## 技术栈
 
@@ -71,7 +71,6 @@ internal/
   pkg/               公共工具（database / git / adkagents）
   router/            路由
   eventbus/          事件总线
-  embed/             前端静态资源占位
 docs/                需求文档 / 设计文档 / 测试规范
 ```
 

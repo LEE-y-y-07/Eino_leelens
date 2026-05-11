@@ -2,9 +2,9 @@ package router
 
 import (
 	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"gitee.com/li-yuyanglee/leelens-backend/config"
-	"gitee.com/li-yuyanglee/leelens-backend/internal/embed"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/handler"
 )
 
@@ -26,6 +26,8 @@ func Setup(
 	}
 
 	r := gin.Default()
+
+	r.Use(gzip.Gzip(gzip.BestCompression))
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
@@ -124,10 +126,6 @@ func Setup(
 	if openAPIHandler != nil {
 		r.GET("/.well-known/openapi.yaml", openAPIHandler.ServeOpenAPI)
 	}
-
-	// 设置前端静态文件路由（嵌入式）
-	// 必须在API路由之后设置，确保API请求优先匹配
-	embed.SetupRouter(r)
 
 	return r
 }

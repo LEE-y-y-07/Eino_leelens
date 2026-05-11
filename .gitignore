@@ -27,5 +27,3 @@ Thumbs.db
 
 # Embed placeholders (generated during build)
 internal/assets/agents/*.yaml
-internal/embed/ui/dist/*
-!internal/embed/ui/dist/.keep

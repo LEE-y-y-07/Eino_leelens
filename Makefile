@@ -1,5 +1,5 @@
 # LeeLens Backend — Go + Gin + Eino
-# 独立后端项目，前端位于 ../leelens-frontend
+# 纯 API server，前端位于 ../eino-lee-lens (Next.js)，独立部署
 
 .PHONY: setup build build-linux build-all run dev air clean init-config stop
 
