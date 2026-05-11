@@ -616,6 +616,9 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 	var tokenUsed int
 	// 追踪已发送的 content，避免重复
 	sentContents := make(map[string]bool)
+	// 追踪最近一个事件的 raw content，用于"同一回合的累积扩展" prefix 检测
+	// (跨回合后 fullContent 含多回合拼接，无法判断当前回合的累积关系)
+	var lastEventContent string
 
 	// 遍历事件流
 	for {
@@ -759,25 +762,39 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 				// 里，用户感觉没收到回答。所以改为不再强行包裹，让前端 fallback 路径
 				// （!thinking && !final 时直接渲染原 content）兜住未打标的回答。
 				content := event.Output.MessageOutput.Message.Content
-				if content != "" {
-					// 检查是否已发送过相同内容，避免重复
-					if !sentContents[content] {
-						sentContents[content] = true
-						// 发送内容增量
+				if content != "" && !sentContents[content] {
+					sentContents[content] = true
+
+					// ADK runner 对同一回合可能先发一个中间态 MessageOutput，再发一个
+					// consolidated MessageOutput；不同回合（如 tool 调用前后）也会各发一次。
+					// 三种情况：
+					//   1. 当前 content 是 lastEventContent 的扩展（同回合累积）→ 只发新增尾部
+					//   2. 当前 content 是 lastEventContent 的子串（同回合旧片段）→ 跳过
+					//   3. 其他 → 新回合内容，整段附加
+					var delta string
+					switch {
+					case lastEventContent != "" && strings.HasPrefix(content, lastEventContent):
+						delta = content[len(lastEventContent):]
+					case lastEventContent != "" && strings.Contains(lastEventContent, content):
+						delta = ""
+					default:
+						delta = content
+					}
+					lastEventContent = content
+
+					if delta != "" {
 						client.sendEvent(ServerMessage{
 							Type:      "content_delta",
 							ID:        assistantMsg.MessageID,
 							Timestamp: time.Now().UnixMilli(),
 							Payload: map[string]interface{}{
 								"message_id": assistantMsg.MessageID,
-								"delta":      content,
+								"delta":      delta,
 							},
 						})
-						fullContent += content
-						// 更新数据库中的消息内容
+						fullContent += delta
 						h.chatService.UpdateMessageContent(ctx, assistantMsg.MessageID, fullContent)
 					}
-
 				}
 
 				// 处理工具调用
