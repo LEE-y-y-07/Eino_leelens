@@ -750,11 +750,15 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 				}
 			} else {
 				// 非流式分支（保留原逻辑作为兜底）
+				//
+				// 早期版本会把"未以 <final>/<thinking> 开头"的 assistant 内容
+				// 强行包一层 <thinking>...</thinking>，假设模型一定按 chat_assistant agent
+				// 协议输出 <final>...</final> 终段。但 GLM/DeepSeek/Qwen 等 OpenAI-compat
+				// 模型并不可靠遵循这个内部协议，会直接吐 markdown 答案。强行包 thinking 后
+				// 前端 splitThinkingFinal 提取不到 final 块，整段答案被收进可折叠的"思考过程"
+				// 里，用户感觉没收到回答。所以改为不再强行包裹，让前端 fallback 路径
+				// （!thinking && !final 时直接渲染原 content）兜住未打标的回答。
 				content := event.Output.MessageOutput.Message.Content
-				// 对非 final 开头的 assistant 消息，自动添加 thinking 包裹
-				if event.Output.MessageOutput.Role == "assistant" && len(strings.TrimSpace(content)) > 0 && !strings.HasPrefix(content, "<final>") && !strings.HasPrefix(content, "<thinking>") {
-					content = "<thinking>" + content + "</thinking>"
-				}
 				if content != "" {
 					// 检查是否已发送过相同内容，避免重复
 					if !sentContents[content] {
