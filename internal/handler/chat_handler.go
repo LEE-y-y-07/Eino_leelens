@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/model"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/pkg/adkagents"
+	"gitee.com/li-yuyanglee/leelens-backend/internal/repository"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/service"
 	"k8s.io/klog/v2"
 )
@@ -38,16 +39,18 @@ type ChatHandler struct {
 	docService   *service.DocumentService
 	hub          *ChatHub
 	agentFactory *adkagents.AgentFactory
+	apiKeyRepo   repository.APIKeyRepository
 }
 
 // NewChatHandler 创建处理器
-func NewChatHandler(chatService service.ChatService, repoService *service.RepositoryService, docService *service.DocumentService, agentFactory *adkagents.AgentFactory) *ChatHandler {
+func NewChatHandler(chatService service.ChatService, repoService *service.RepositoryService, docService *service.DocumentService, agentFactory *adkagents.AgentFactory, apiKeyRepo repository.APIKeyRepository) *ChatHandler {
 	return &ChatHandler{
 		chatService:  chatService,
 		repoService:  repoService,
 		docService:   docService,
 		hub:          NewChatHub(),
 		agentFactory: agentFactory,
+		apiKeyRepo:   apiKeyRepo,
 	}
 }
 
@@ -584,13 +587,29 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 		}
 	}
 
-	// 创建Runner并执行 — 启用流式
-	// 历史背景：之前关掉是因为走 OpenAI 兼容协议时，中继(Bedrock claude→OpenAI 转换)在并行
-	// tool_calls 的 chunk 上把 Index 都标成 0，导致 Eino concatToolCalls 把不同 tool 的 args
-	// 错拼成一团。改用 Anthropic 原生协议(provider=anthropic)后，原生消息流里每个 content_block
-	// 都带正确的 block_index，并行 tool 调用可以正确区分，于是流式重新可用。
-	// OpenAI 兼容协议(GLM/DeepSeek 等)同样走流式 —— 那些模型一般不并行 tool 调用，不会触发 bug。
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true})
+	// 创建Runner并执行 — 按当前最高优先级 enabled 的 api_key 的 provider 决定是否启用流式
+	//
+	// 历史背景：流式之前因为走 OpenAI 兼容协议(中继 Bedrock claude→OpenAI 转换)在并行 tool_calls
+	// 的 chunk 上把 Index 都标成 0，导致 Eino concatToolCalls 把不同 tool 的 args 错拼成一团，
+	// 因此关掉。改用 Anthropic 原生协议(provider=anthropic)后，原生消息流里每个 content_block
+	// 都带正确的 block_index，并行 tool 调用可以正确区分，流式重新可用。
+	//
+	// 但 OpenAI 兼容协议(GLM/DeepSeek 等)走 eino agent runner + EnableStreaming + tool-calling
+	// 这条具体组合时，content delta chunk 会被重复 yield（用户看到"让我让我先先了解一下了解一下"
+	// 这种逐 chunk 翻倍的现象）。eino 适配层 bug，未上游修复前不能对非 anthropic provider 启用
+	// EnableStreaming，否则就是错误内容。
+	//
+	// 因此这里在创建 runner 前查一下当前会被 ProxyChatModel 选中的最高优先级 enabled api_key,
+	// 仅当其 provider == "anthropic" 时才启用流式；其他 provider 走非流式分支（损失打字机 UX，
+	// 但内容正确）。
+	enableStreaming := false
+	if h.apiKeyRepo != nil {
+		if topKey, kerr := h.apiKeyRepo.GetHighestPriority(ctx); kerr == nil && topKey != nil && topKey.Provider == "anthropic" {
+			enableStreaming = true
+		}
+	}
+	klog.V(6).Infof("[ChatHandler] runAgent: EnableStreaming=%v", enableStreaming)
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: enableStreaming})
 	iter := runner.Run(ctx, adkMessages)
 
 	var fullContent string

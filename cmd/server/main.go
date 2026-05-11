@@ -208,7 +208,7 @@ func main() {
 	}
 
 	// 创建 ChatHandler，传入 AgentFactory、RepositoryService 和 DocumentService
-	chatHandler := handler.NewChatHandler(chatService, repoService, docService, agentFactory)
+	chatHandler := handler.NewChatHandler(chatService, repoService, docService, agentFactory, apiKeyRepo)
 	// 启动ChatHub
 	go chatHandler.GetHub().Run()
 
