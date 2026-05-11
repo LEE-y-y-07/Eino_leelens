@@ -23,7 +23,11 @@ func NewTargetManager(syncTargetRepo repository.SyncTargetRepository) *TargetMan
 	}
 }
 
-// ValidateTargetServer 验证目标服务器地址格式
+// ValidateTargetServer 验证目标服务器地址格式。
+//
+// 容错策略：用户填裸 origin（如 http://peer.example.com）时自动补 /api/sync 后缀，
+// 因为 LeeLens 的 sync 接口固定挂在 /api/sync 下，强制要求用户记住路径不友好。
+// 仍要求 scheme + host 是合法的（http/https + 非空 host）。
 func (m *TargetManager) ValidateTargetServer(value string) (string, error) {
 	normalized := strings.TrimSpace(value)
 	if normalized == "" {
@@ -32,10 +36,18 @@ func (m *TargetManager) ValidateTargetServer(value string) (string, error) {
 	normalized = strings.TrimSuffix(normalized, "/")
 	parsed, err := url.Parse(normalized)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", errors.New("目标服务器地址格式不正确")
+		return "", errors.New("目标服务器地址格式不正确，需要 http:// 或 https:// 开头加完整域名")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("目标服务器地址只支持 http/https 协议")
 	}
 	if !strings.HasSuffix(parsed.Path, "/api/sync") {
-		return "", errors.New("目标服务器地址格式不正确")
+		// 用户没填 /api/sync 时自动补上
+		if parsed.Path == "" || parsed.Path == "/" {
+			normalized = strings.TrimSuffix(normalized, "/") + "/api/sync"
+		} else {
+			return "", errors.New("目标服务器地址路径必须是 /api/sync，请检查是否填错")
+		}
 	}
 	return normalized, nil
 }
