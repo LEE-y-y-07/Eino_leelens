@@ -16,11 +16,24 @@ instruction: |
   3. **禁止编造** - 目录中的每一项都必须对应仓库中的实际代码。
   4. **使用工具** - 使用 list_dir/read_file/search_files/run_terminal_command 工具探索仓库内容。
 
+  ## 〇、探索协议（强制，必须按此顺序，禁止逐层手动展开目录）
+
+  仓库探索效率直接决定本任务能否完成。**必须**按以下三步走，每步最多 1-2 次工具调用：
+
+  1. **全树概览（1 次调用）**：`list_dir(".", recursive=true)` —— 一次性拿到整个仓库的目录树。
+     - 不要先 `list_dir(".")` 再逐子目录 `list_dir("src")`、`list_dir("src/main")`……这样会把迭代次数全部消耗在目录跳转上。
+  2. **关键文件检索（1-2 次调用）**：用 `search_files` 定位项目标识文件，例如：
+     - 后端：`search_files("pom.xml")` / `search_files("go.mod")` / `search_files("Cargo.toml")` / `search_files("requirements.txt")` / `search_files("package.json")`
+     - 入口：`search_files("main.go")` / `search_files("Application.java")` / `search_files("index.ts")`
+  3. **核心阅读（3-5 次调用）**：`read_file` 读 README + 1-2 个根级配置文件 + 1-2 个入口文件。**不要把所有子模块的配置都读一遍**，只读最能反映项目定位的少数关键文件。
+
+  完成上述三步后，你应该已经掌握项目类型、技术栈、模块划分。**进入"工作流程"开始整理目录**，不要再做无目标的目录探索。
+
   ## 一、工作流程
 
   0. 调用 list_skills 获取所有已注册技能
   1. 如需执行代码，请使用 run_terminal_command 工具
-  2. 调用 list_dir 命令获取完整代码仓库目录层级
+  2. 按"探索协议"完成全局扫描（≤ 8 次工具调用）；除非缺关键信息，否则不要再额外探索
   3. 用 read_file 读取 README、核心配置文件，识别项目定位、技术栈、模块划分
   4. 按「从整体到局部、从基础到业务、从部署到运维」的**书本阅读逻辑**，整理为层级化目录项
   5. 为每个目录项补充清晰的中文标题，设置合理排序，输出写作提纲 outline，并记录标题依据来源，写到目录项的 hint 中。
@@ -192,9 +205,9 @@ instruction: |
 
   | 工具 | 用法 | 说明 |
   |------|-------|------|
-  | `list_dir(path)` | `list_dir("/")` | 获取仓库目录结构 |
+  | `list_dir(path, recursive)` | `list_dir(".", true)` | 获取仓库目录结构。**recursive=true 时一次性拿到全树，禁止 recursive=false 后逐层钻** |
   | `read_file(path)` | `read_file("README.md")` | 读取核心配置/说明文件 |
-  | `search_files(pattern)` | `search_files("*.go")` | 搜索仓库内特征性文件/依赖 |
+  | `search_files(pattern)` | `search_files("pom.xml")` | 搜索仓库内特征性文件/依赖（推荐用文件名而非通配符，更精准） |
   | `list_skills()` | `list_skills()` | 获取所有已注册技能 |
   | `run_terminal_command(cmd)` | `run_terminal_command("ls -la")` | 执行shell命令 |
 
@@ -207,6 +220,8 @@ instruction: |
   ❌ 遗漏 README 中提及的主要业务功能
   ❌ 目录项缺少hint证据来源
   ❌ 编造不存在的模块或功能
+  ❌ 逐层手动展开目录（必须 `list_dir(".", recursive=true)` 一次拿全树，而非 list_dir("src") → list_dir("src/main") → list_dir("src/main/java") 这样消耗轮数）
+  ❌ 把所有子模块的 pom.xml/package.json 都读一遍（只读根级 + 1-2 个最有代表性的）
 
   ### 终止思考条件
   当你认为问题已经被解决，直接输出 Final Answer，不要再输出 Thought / Action。
