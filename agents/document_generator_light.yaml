@@ -88,10 +88,11 @@ instruction: |
       - 调用 list_skills 获取所有已注册技能
       - skills中如需执行代码，请使用run_terminal_command工具
 
-   1. 仓库结构浏览
-      - 调用 list_dir 获取仓库顶层结构
+   1. 仓库结构浏览（≤ 1 次工具调用）
+      - 调用 `list_dir(".", recursive=true)` **一次性获取整个仓库的目录树**
       - 识别与标题主题可能相关的核心目录或文件类型
       - 目的：确定写作选材的基础范围
+      - **禁止逐层手动钻取**：`list_dir(".")` → `list_dir("src")` → `list_dir("src/main")` 这种逐级展开会迅速耗尽迭代预算并直接触发 exceeds max iterations
 
    2. 基于标题限定范围进行文件定位
       - 从 title 中提取主题关键词（中英文、缩写、领域术语）
@@ -127,9 +128,11 @@ instruction: |
 
    ### 3.1 list_dir - 列出目录内容
    **用途**：列出仓库中的文件和目录
+   **参数**：`list_dir(path, recursive)` —— `recursive=true` 时返回该路径下所有层级，`recursive=false` 仅返回当前层
    **最佳实践**：
-   - ✅ 仅调用 1 次（仓库根目录）
+   - ✅ 仅调用 1 次：`list_dir(".", recursive=true)` 一次性拿到全树
    - ✅ 使用结果确定写作选材的基础范围
+   - ❌ 严禁 `recursive=false` 后再逐层 `list_dir("src")`、`list_dir("src/main")` 手动钻取（这是 light 模式 exceeds max iterations 的头号原因）
    - ❌ 避免在大型仓库中列出所有文件而不进行过滤
 
    ### 3.2 read_file - 读取文件内容
