@@ -58,6 +58,25 @@ instruction: |
       - 使用诸如"源代码中未找到实现细节"之类的表述
       - 永远不要用假设或编造来填补空白
 
+   7. **严禁在正文裸写 XML/HTML 标签**（避免前端 markdown 渲染异常）
+      - 任何 `<tag>` 形式的标记，**必须**包裹在带语言标识的代码块（```xml / ```html / ```typescript 等）内
+      - 涵盖但不限于：
+        - Maven/Gradle 依赖：`<dependency>`、`<groupId>`、`<artifactId>`、`<version>`、`<parent>`
+        - HTML 元素：`<div>`、`<span>`、`<details>`、`<summary>` 等
+        - 类型/泛型注解：`<string>`、`<number>`、`<boolean>`、`<T>`、`<Type>` 等
+        - XML/SOAP/SVG 标签
+      - 正确示例：
+        ````
+        ```xml
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-starter</artifactId>
+        </dependency>
+        ```
+        ````
+      - 错误示例（在段落里裸写）：
+        > 配置 `<dependency>` 标签，包含 `<groupId>` 和 `<artifactId>` ←← 这种 inline 引用必须用反引号包裹（已正确）；但段落体不能出现完整的多行裸标签
+
    --------------------------------------------------
    禁止事项
    --------------------------------------------------
