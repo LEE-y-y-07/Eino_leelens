@@ -12,9 +12,9 @@ import (
 // ChatService 对话服务接口
 type ChatService interface {
 	// 会话管理
-	CreateSession(ctx context.Context, repoID uint) (*model.ChatSession, error)
+	CreateSession(ctx context.Context, repoID uint, docID uint) (*model.ChatSession, error)
 	GetSession(ctx context.Context, sessionID string) (*model.ChatSession, error)
-	ListSessions(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
+	ListSessions(ctx context.Context, repoID uint, docID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
 	ListPublicSessions(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
 	DeleteSession(ctx context.Context, sessionID string) error
 	UpdateSessionTitle(ctx context.Context, sessionID, title string) error
@@ -61,11 +61,12 @@ func generateID(prefix string) string {
 	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
 }
 
-// CreateSession 创建会话
-func (s *chatService) CreateSession(ctx context.Context, repoID uint) (*model.ChatSession, error) {
+// CreateSession 创建会话；docID=0 表示全局对话，>0 表示仅围绕该文档作答
+func (s *chatService) CreateSession(ctx context.Context, repoID uint, docID uint) (*model.ChatSession, error) {
 	session := &model.ChatSession{
 		SessionID: generateID("sess"),
 		RepoID:    repoID,
+		DocID:     docID,
 		Title:     "新对话",
 		Status:    "active",
 		CreatedAt: time.Now(),
@@ -84,9 +85,9 @@ func (s *chatService) GetSession(ctx context.Context, sessionID string) (*model.
 	return s.sessionRepo.GetBySessionID(ctx, sessionID)
 }
 
-// ListSessions 获取会话列表
-func (s *chatService) ListSessions(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error) {
-	return s.sessionRepo.ListByRepoID(ctx, repoID, page, pageSize)
+// ListSessions 获取会话列表；docID=0 表示返回全部（不按文档过滤），>0 表示仅返回该文档下的会话
+func (s *chatService) ListSessions(ctx context.Context, repoID uint, docID uint, page, pageSize int) ([]*model.ChatSession, int64, error) {
+	return s.sessionRepo.ListByRepoID(ctx, repoID, docID, page, pageSize)
 }
 
 // ListPublicSessions 获取公开会话列表

@@ -12,7 +12,7 @@ import (
 type ChatSessionRepository interface {
 	Create(ctx context.Context, session *model.ChatSession) error
 	GetBySessionID(ctx context.Context, sessionID string) (*model.ChatSession, error)
-	ListByRepoID(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
+	ListByRepoID(ctx context.Context, repoID uint, docID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
 	ListPublicByRepoID(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
 	Update(ctx context.Context, session *model.ChatSession) error
 	Delete(ctx context.Context, sessionID string) error
@@ -48,23 +48,31 @@ func (r *chatSessionRepository) GetBySessionID(ctx context.Context, sessionID st
 	return &session, nil
 }
 
-// ListByRepoID 获取仓库的会话列表
-func (r *chatSessionRepository) ListByRepoID(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error) {
+// ListByRepoID 获取仓库的会话列表（可选按 docID 过滤；docID=0 表示返回全部，不过滤）
+func (r *chatSessionRepository) ListByRepoID(ctx context.Context, repoID uint, docID uint, page, pageSize int) ([]*model.ChatSession, int64, error) {
 	var sessions []*model.ChatSession
 	var total int64
 
-	// 查询总数
-	if err := r.db.WithContext(ctx).
+	q := r.db.WithContext(ctx).
 		Model(&model.ChatSession{}).
-		Where("repo_id = ? AND status != 'deleted'", repoID).
-		Count(&total).Error; err != nil {
+		Where("repo_id = ? AND status != 'deleted'", repoID)
+	if docID > 0 {
+		q = q.Where("doc_id = ?", docID)
+	}
+
+	// 查询总数
+	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	// 查询列表
 	offset := (page - 1) * pageSize
-	err := r.db.WithContext(ctx).
-		Where("repo_id = ? AND status != 'deleted'", repoID).
+	listQ := r.db.WithContext(ctx).
+		Where("repo_id = ? AND status != 'deleted'", repoID)
+	if docID > 0 {
+		listQ = listQ.Where("doc_id = ?", docID)
+	}
+	err := listQ.
 		Order("updated_at DESC").
 		Offset(offset).
 		Limit(pageSize).

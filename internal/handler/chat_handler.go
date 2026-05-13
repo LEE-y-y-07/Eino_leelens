@@ -85,7 +85,13 @@ func (h *ChatHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
-	session, err := h.chatService.CreateSession(c.Request.Context(), uint(repoID))
+	// 可选 body：{"doc_id": 123} 表示这是"就此文档提问"会话；不传或 doc_id=0 视为全局对话
+	var body struct {
+		DocID uint `json:"doc_id"`
+	}
+	_ = c.ShouldBindJSON(&body) // 容忍空/非 JSON body —— 老前端不传也兼容
+
+	session, err := h.chatService.CreateSession(c.Request.Context(), uint(repoID), body.DocID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -94,7 +100,7 @@ func (h *ChatHandler) CreateSession(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
-// ListSessions 获取会话列表
+// ListSessions 获取会话列表（可选 ?doc_id= 仅返回该文档下会话；不传或 0 返回全部）
 func (h *ChatHandler) ListSessions(c *gin.Context) {
 	repoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -104,8 +110,9 @@ func (h *ChatHandler) ListSessions(c *gin.Context) {
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	docID, _ := strconv.ParseUint(c.DefaultQuery("doc_id", "0"), 10, 32)
 
-	sessions, total, err := h.chatService.ListSessions(c.Request.Context(), uint(repoID), page, pageSize)
+	sessions, total, err := h.chatService.ListSessions(c.Request.Context(), uint(repoID), uint(docID), page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -522,6 +529,20 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 					}
 					repoInfo += "\n可根据原始文档DocID，通过read_doc(doc_id)获取原文全文\n"
 				}
+			}
+		}
+	}
+
+	// 若会话绑定了焦点文档（"就此文档提问"），在 system prompt 顶部前置焦点段；
+	// agent 仍能看到全 repo 文档列表作 fallback，但被明确指引优先 read_doc(focusDocID)。
+	if session, sErr := h.chatService.GetSession(ctx, client.sessionID); sErr == nil && session != nil && session.DocID > 0 {
+		if h.docService != nil {
+			if focusDoc, dErr := h.docService.Get(session.DocID); dErr == nil && focusDoc != nil {
+				focusBlock := fmt.Sprintf(
+					"## 焦点文档（本会话仅围绕此文档作答）\n- DocID: %d\n- 标题: %s\n\n请优先调用 read_doc(%d) 读取该文档完整内容回答用户问题；除非用户明确转向其它话题，不要主动检索或引用仓库内其它文档。\n\n",
+					focusDoc.ID, focusDoc.Title, focusDoc.ID,
+				)
+				repoInfo = focusBlock + repoInfo
 			}
 		}
 	}

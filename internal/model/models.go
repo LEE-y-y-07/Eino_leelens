@@ -132,6 +132,7 @@ type ChatSession struct {
 	ID           uint          `json:"id" gorm:"primaryKey"`
 	SessionID    string        `json:"session_id" gorm:"size:64;uniqueIndex"`            // 唯一会话标识
 	RepoID       uint          `json:"repo_id" gorm:"index"`                             // 关联仓库ID
+	DocID        uint          `json:"doc_id" gorm:"index;default:0"`                    // 关联文档ID，0 = 全局对话；>0 = 仅围绕该文档作答
 	Title        string        `json:"title" gorm:"size:255"`                            // 会话标题
 	Status       string        `json:"status" gorm:"size:20;default:'active'"`           // active, archived, deleted
 	Visibility   string        `json:"visibility" gorm:"size:20;default:'private'"`      // public, private
