@@ -78,6 +78,19 @@ func (r *documentRepository) DeleteByRepositoryID(repoID uint) error {
 	return r.db.Where("repository_id = ?", repoID).Delete(&model.Document{}).Error
 }
 
+// DetachAllByRepository 把仓库下所有 doc 解绑：task_id=0、is_latest=false
+// 不删数据，让所有 doc 进入"已归档"状态供「历史版本」查看，
+// 同时打断与 task 表的关联，便于后续 hard-delete task 不级联删 doc。
+// 用于 light → deep 升级时的"清空当前任务集合，保留历史文档"流程。
+func (r *documentRepository) DetachAllByRepository(repoID uint) error {
+	return r.db.Model(&model.Document{}).
+		Where("repository_id = ?", repoID).
+		Updates(map[string]interface{}{
+			"task_id":   0,
+			"is_latest": false,
+		}).Error
+}
+
 func (r *documentRepository) CreateVersioned(doc *model.Document) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var maxVersion sql.NullInt64

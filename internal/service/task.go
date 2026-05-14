@@ -465,6 +465,22 @@ func (s *TaskService) ResetAllByRepository(repoID uint) (int, error) {
 	return reset, nil
 }
 
+// DeleteAllByRepository 用于 light → deep "从零重新生成" 流程：
+//  1. 先 detach 所有文档（task_id=0、is_latest=false），文档保留在 documents
+//     表里供「历史版本」查看，但不再属于任何 task
+//  2. 再硬删除 repo 下所有 task，避免删除时级联清掉文档
+//
+// 调用方应在调用本方法前确保所有 active task 已被取消（CancelAll），
+// 否则中间会跑到一半被打断。
+func (s *TaskService) DeleteAllByRepository(repoID uint) error {
+	if s.docService != nil {
+		if err := s.docService.DetachAllByRepository(repoID); err != nil {
+			return fmt.Errorf("解绑文档失败: %w", err)
+		}
+	}
+	return s.taskRepo.DeleteByRepositoryID(repoID)
+}
+
 // Delete 删除任务
 func (s *TaskService) Delete(taskID uint) error {
 	return s.lifecycle.Delete(taskID, s.docService)

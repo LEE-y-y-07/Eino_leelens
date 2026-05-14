@@ -42,6 +42,7 @@ type DocumentRepository interface {
 	Delete(id uint) error
 	DeleteByTaskID(taskID uint) error
 	DeleteByRepositoryID(repoID uint) error
+	DetachAllByRepository(repoID uint) error
 	UpdateTaskID(docID uint, taskID uint) error
 	TransferLatest(oldDocID uint, newDocID uint) error
 

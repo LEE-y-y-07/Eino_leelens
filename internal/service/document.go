@@ -142,6 +142,13 @@ func (s *DocumentService) DeleteByTaskID(taskID uint) error {
 	return s.docRepo.DeleteByTaskID(taskID)
 }
 
+// DetachAllByRepository 把仓库下所有 doc 解绑：task_id=0 + is_latest=false。
+// 不删除数据，文档保留在 documents 表里供「历史版本」查看。
+// 用于 light → deep 升级流程在删除老 task 之前先打断 doc 与 task 的关联。
+func (s *DocumentService) DetachAllByRepository(repoID uint) error {
+	return s.docRepo.DetachAllByRepository(repoID)
+}
+
 func (s *DocumentService) ExportAll(repoID uint) ([]byte, string, error) {
 	repo, err := s.repoRepo.GetBasic(repoID)
 	if err != nil {

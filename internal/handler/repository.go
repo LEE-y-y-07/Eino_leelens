@@ -118,14 +118,20 @@ func (h *RepositoryHandler) RunAllTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "tasks started"})
 }
 
-// UpgradeToDeep 把 light 模式仓库一键升级为 deep 模式：
-//  1. 校验仓库当前必须是 light（已经是 deep 直接拒绝）
-//  2. 强制重置仓库下所有 task 到 pending（含取消 active 任务）
-//  3. 切 repository.generation_mode = "deep"
-//  4. 立即触发 run-all 把 task 入队
+// UpgradeToDeep 把 light 模式仓库一键升级为 deep 模式。
 //
-// 现有 light 文档会在 deep 重跑过程中被 docService.Update 直接覆盖；
-// 不保留旧版本（前端二次确认弹窗会告知）。
+// 设计：deep 与 light 是"独立两套流程"——deep 不复用 light 跑出的 task 结构。
+// 升级时：
+//  1. 校验 repo.generation_mode == "light"
+//  2. 取消所有 active task 的 ctx（CancelAll）
+//  3. 解绑所有文档：task_id=0、is_latest=false（保留在 documents 表里供
+//     "历史版本"查看，与 task 表脱钩）
+//  4. 硬删除 repo 下所有 task
+//  5. 聚合 repo 状态（无 task → ready，让 RunAllTasks 通过 CanExecuteTasks 检查）
+//  6. 切 repository.generation_mode = "deep"
+//  7. 创建一个新 TocWriter task（sort_order=10）—— deep 的 toc_editor.yaml
+//     会按 deep 风格重新决定 outline 与下游 task 集合
+//  8. RunAllTasks 立即把新 toc task 入队
 //
 // 路由: POST /api/repositories/:id/upgrade-to-deep
 func (h *RepositoryHandler) UpgradeToDeep(c *gin.Context) {
@@ -143,42 +149,62 @@ func (h *RepositoryHandler) UpgradeToDeep(c *gin.Context) {
 	}
 	if repo.GenerationMode != "light" {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":           "仓库当前不是 light 模式，无法升级",
-			"current_mode":    repo.GenerationMode,
+			"error":        "仓库当前不是 light 模式，无法升级",
+			"current_mode": repo.GenerationMode,
 		})
 		return
 	}
 
-	reset, err := h.taskService.ResetAllByRepository(repoID)
-	if err != nil {
+	// 1) 先把还在跑的 task 取消，避免和后续删除竞争
+	canceled, _ := h.taskService.CancelAll(repoID)
+
+	// 2) 解绑所有文档（保留数据，断开与 task 的关联）+ 删除所有 task
+	if err := h.taskService.DeleteAllByRepository(repoID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-			"reset": reset,
+			"error":    err.Error(),
+			"canceled": canceled,
 		})
 		return
 	}
 
+	// 3) 重新聚合 repo 状态：task 全没了，summary 全 0 → 落到 ready
+	_ = h.taskService.UpdateRepositoryStatus(repoID)
+
+	// 4) 切 mode
 	if err := h.service.SetGenerationMode(repoID, "deep"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-			"reset": reset,
+			"error":    err.Error(),
+			"canceled": canceled,
 		})
 		return
 	}
 
+	// 5) 创建一个新的 TocWriter task，让 deep 的 toc_editor.yaml 重新决定 outline
+	//    后续 toc 跑完会自动按 deep outline 创建对应的 DocWrite task 集合
+	tocTask, err := h.taskService.CreateTocWriteTask(c.Request.Context(), repoID, "目录分析", 10)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":    "创建 toc task 失败: " + err.Error(),
+			"canceled": canceled,
+		})
+		return
+	}
+
+	// 6) 入队
 	if err := h.service.RunAllTasks(repoID); err != nil {
-		// mode 已切换，但入队失败：返回 200 提示用户手动 run-all
 		c.JSON(http.StatusOK, gin.H{
 			"message":     "升级到 deep 已完成，但入队失败，请手动点 run-all",
-			"reset":       reset,
+			"canceled":    canceled,
+			"toc_task_id": tocTask.ID,
 			"enqueue_err": err.Error(),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "upgrade to deep done",
-		"reset":   reset,
+		"message":     "upgrade to deep done; toc 重新生成中，完成后会按 deep outline 创建新 task 集合",
+		"canceled":    canceled,
+		"toc_task_id": tocTask.ID,
 	})
 }
 
