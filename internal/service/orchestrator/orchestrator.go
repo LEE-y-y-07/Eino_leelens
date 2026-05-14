@@ -55,6 +55,11 @@ type Orchestrator struct {
 
 	activeCancellations map[uint]context.CancelFunc
 	cancelMutex         sync.Mutex
+
+	// pausedRepos 记录被批量暂停的仓库（repoID -> struct{}）。
+	// 由上层 service 在 PauseAll/ResumeAll 时维护，scheduler 入队 pending 时
+	// 应跳过 paused repo，避免暂停时仍有 pending 被悄悄推到 queued。
+	pausedRepos sync.Map
 }
 
 // -----------------------------
@@ -236,6 +241,33 @@ func (o *Orchestrator) CancelTask(taskID uint) bool {
 	}
 
 	return true
+}
+
+// -----------------------------
+// Pause / Resume per repo
+// -----------------------------
+
+// PauseRepo 标记一个仓库为已暂停。被标记的 repo：
+//   - scheduler 入队 pending 时应通过 IsRepoPaused 跳过
+//   - 上层 service 自行决定如何把现有 active task 切到 paused 状态（例如逐个 CancelTask + 改 DB）
+//
+// 本方法只维护 in-memory 标记，不会触碰任何 task 状态。
+func (o *Orchestrator) PauseRepo(repoID uint) {
+	o.pausedRepos.Store(repoID, struct{}{})
+	klog.V(6).Infof("Repo paused: repoID=%d", repoID)
+}
+
+// ResumeRepo 清除暂停标记。上层 service 应在调用本方法前/后把 paused 状态的
+// task 改回 queued 并重新入队。
+func (o *Orchestrator) ResumeRepo(repoID uint) {
+	o.pausedRepos.Delete(repoID)
+	klog.V(6).Infof("Repo resumed: repoID=%d", repoID)
+}
+
+// IsRepoPaused 返回 repoID 是否处于暂停状态。
+func (o *Orchestrator) IsRepoPaused(repoID uint) bool {
+	_, ok := o.pausedRepos.Load(repoID)
+	return ok
 }
 
 // -----------------------------

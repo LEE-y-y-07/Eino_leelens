@@ -273,6 +273,98 @@ func (s *TaskLifecycleService) CancelAll(repoID uint) (int, error) {
 	return canceled, lastErr
 }
 
+// PauseAll 批量暂停仓库下所有 pending/queued/running 任务。
+// 流程：
+//  1. 在 orchestrator 内 in-memory 标记 repo 为 paused（scheduler 后续不再推 pending）
+//  2. 对每个 active task：先把 DB status 写成 paused（状态机迁移）
+//  3. 对其中 running 的，再调用 orchestrator.CancelTask 取消其 ctx
+//     —— Run() 内已加 ctx.Err()!=nil 时跳过 FailTask 的保护，
+//     不会把 paused 覆盖回 failed
+//
+// paused 不是终止态：后续可通过 ResumeAll 回到 queued 重新入队。
+func (s *TaskLifecycleService) PauseAll(repoID uint) (int, error) {
+	if s.orchestrator != nil {
+		s.orchestrator.PauseRepo(repoID)
+	}
+
+	tasks, err := s.taskRepo.GetByRepository(repoID)
+	if err != nil {
+		return 0, fmt.Errorf("获取任务列表失败: %w", err)
+	}
+
+	var paused int
+	var lastErr error
+	for i := range tasks {
+		t := &tasks[i]
+		oldStatus := statemachine.TaskStatus(t.Status)
+		if oldStatus != statemachine.TaskStatusPending &&
+			oldStatus != statemachine.TaskStatusQueued &&
+			oldStatus != statemachine.TaskStatusRunning {
+			continue
+		}
+
+		newStatus := statemachine.TaskStatusPaused
+		if err := s.taskStateMachine.Transition(oldStatus, newStatus, t.ID); err != nil {
+			klog.Warningf("批量暂停-状态迁移失败: repoID=%d taskID=%d %s->%s err=%v",
+				repoID, t.ID, oldStatus, newStatus, err)
+			lastErr = err
+			continue
+		}
+
+		t.Status = string(newStatus)
+		if err := s.taskRepo.Save(t); err != nil {
+			klog.Warningf("批量暂停-保存失败: repoID=%d taskID=%d err=%v", repoID, t.ID, err)
+			lastErr = err
+			continue
+		}
+
+		// running 任务的 ctx 取消放在 DB 写完之后，确保 Run() 看到 ctx.Err() 时
+		// 即使触发了 FailTask 检查也已经命中"跳过"分支
+		if oldStatus == statemachine.TaskStatusRunning && s.orchestrator != nil {
+			if !s.orchestrator.CancelTask(t.ID) {
+				klog.Warningf("批量暂停-未在编排器中找到 running 任务: taskID=%d", t.ID)
+			}
+		}
+		paused++
+	}
+
+	_ = s.UpdateRepositoryStatus(repoID)
+	klog.V(6).Infof("批量暂停完成: repoID=%d paused=%d lastErr=%v", repoID, paused, lastErr)
+	return paused, lastErr
+}
+
+// ResumeAll 恢复仓库下所有 paused 任务：清除 orchestrator 暂停标记 +
+// 把 DB status=paused 的任务批量改回 queued 并重新入队。
+// 实际入队由 caller 通过 TaskService.Enqueue 完成（状态机里 paused -> queued 已合法）。
+func (s *TaskLifecycleService) ResumeAll(repoID uint, enqueueFn func(taskID uint) error) (int, error) {
+	if s.orchestrator != nil {
+		s.orchestrator.ResumeRepo(repoID)
+	}
+
+	tasks, err := s.taskRepo.GetByRepository(repoID)
+	if err != nil {
+		return 0, fmt.Errorf("获取任务列表失败: %w", err)
+	}
+
+	var resumed int
+	var lastErr error
+	for _, t := range tasks {
+		if statemachine.TaskStatus(t.Status) != statemachine.TaskStatusPaused {
+			continue
+		}
+		if err := enqueueFn(t.ID); err != nil {
+			klog.Warningf("批量恢复-单个任务入队失败: repoID=%d taskID=%d err=%v", repoID, t.ID, err)
+			lastErr = err
+			continue
+		}
+		resumed++
+	}
+
+	_ = s.UpdateRepositoryStatus(repoID)
+	klog.V(6).Infof("批量恢复完成: repoID=%d resumed=%d lastErr=%v", repoID, resumed, lastErr)
+	return resumed, lastErr
+}
+
 // Delete 删除任务（删除单个任务）
 // 注意：删除任务也会删除关联的文档
 func (s *TaskLifecycleService) Delete(taskID uint, docService *DocumentService) error {
@@ -365,6 +457,8 @@ func (s *TaskLifecycleService) buildTaskSummary(tasks []model.Task) *statemachin
 			summary.Failed++
 		case statemachine.TaskStatusCanceled:
 			summary.Canceled++
+		case statemachine.TaskStatusPaused:
+			summary.Paused++
 		}
 	}
 

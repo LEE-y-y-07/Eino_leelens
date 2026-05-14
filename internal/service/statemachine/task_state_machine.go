@@ -16,6 +16,7 @@ const (
 	TaskStatusSucceeded TaskStatus = "succeeded" // 执行成功（替代completed更语义化）
 	TaskStatusFailed    TaskStatus = "failed"    // 执行失败
 	TaskStatusCanceled  TaskStatus = "canceled"  // 被取消
+	TaskStatusPaused    TaskStatus = "paused"    // 被暂停（可 resume 回到 queued；不是终止态）
 )
 
 // TaskTransition 定义任务状态迁移
@@ -59,6 +60,14 @@ func NewTaskStateMachine() *TaskStateMachine {
 		// 取消流程
 		{TaskStatusQueued, TaskStatusCanceled},
 		{TaskStatusRunning, TaskStatusCanceled},
+
+		// 暂停 / 恢复流程（per-repo 批量暂停下使用；paused 不是终止态）
+		{TaskStatusPending, TaskStatusPaused},
+		{TaskStatusQueued, TaskStatusPaused},
+		{TaskStatusRunning, TaskStatusPaused},
+		{TaskStatusPaused, TaskStatusQueued},   // resume 入队
+		{TaskStatusPaused, TaskStatusPending},  // 用户重置 paused 任务
+		{TaskStatusPaused, TaskStatusCanceled}, // 用户彻底取消 paused 任务
 	}
 
 	for _, t := range transitions {

@@ -225,6 +225,10 @@ func (s *TaskService) enqueuePendingTasks(ctx context.Context) {
 			return
 		default:
 		}
+		// 跳过被批量暂停的仓库——避免暂停期间 pending 仍被悄悄推到 queued
+		if s.orchestrator != nil && s.orchestrator.IsRepoPaused(task.RepositoryID) {
+			continue
+		}
 		if err := s.Enqueue(task.ID); err != nil {
 			if errors.Is(err, ErrRunAfterNotSatisfied) {
 				continue
@@ -286,6 +290,14 @@ func (s *TaskService) Run(ctx context.Context, taskID uint) error {
 	execErr := s.executeTaskLogic(ctx, task)
 
 	if execErr != nil {
+		// 若 ctx 被外部取消（用户取消 / 仓库批量暂停），lifecycle 已经在外层写过
+		// 终态（canceled/paused），这里不能再调 FailTask，否则 running -> failed
+		// 会覆盖已写入的 paused/canceled 状态。
+		if ctx.Err() != nil {
+			klog.V(6).Infof("任务在 ctx 取消下退出，跳过 FailTask 让外层终态生效: taskID=%d, ctxErr=%v",
+				task.ID, ctx.Err())
+			return execErr
+		}
 		_ = s.FailTask(task, fmt.Sprintf("任务执行失败: %v", execErr))
 		return execErr
 	}
@@ -421,6 +433,16 @@ func (s *TaskService) Cancel(taskID uint) error {
 // CancelAll 批量取消仓库下所有 queued + running 任务，返回实际取消数量
 func (s *TaskService) CancelAll(repoID uint) (int, error) {
 	return s.lifecycle.CancelAll(repoID)
+}
+
+// PauseAll 批量暂停仓库下所有 pending/queued/running 任务
+func (s *TaskService) PauseAll(repoID uint) (int, error) {
+	return s.lifecycle.PauseAll(repoID)
+}
+
+// ResumeAll 批量恢复仓库下所有 paused 任务（重新入队）
+func (s *TaskService) ResumeAll(repoID uint) (int, error) {
+	return s.lifecycle.ResumeAll(repoID, s.Enqueue)
 }
 
 // Delete 删除任务

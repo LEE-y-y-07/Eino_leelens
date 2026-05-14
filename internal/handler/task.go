@@ -250,6 +250,58 @@ func (h *TaskHandler) CancelAllByRepository(c *gin.Context) {
 	})
 }
 
+// PauseAllByRepository 批量暂停仓库下所有 pending/queued/running 任务
+// 路由: POST /api/repositories/:id/tasks/pause-all
+// 返回: { "paused": N, "message": "..." }
+// paused 不是终止态，可通过 resume-all 恢复继续。
+func (h *TaskHandler) PauseAllByRepository(c *gin.Context) {
+	repoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid repository id"})
+		return
+	}
+
+	count, err := h.service.PauseAll(uint(repoID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":  err.Error(),
+			"paused": count,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "pause-all done",
+		"paused":  count,
+	})
+}
+
+// ResumeAllByRepository 批量恢复仓库下所有 paused 任务
+// 路由: POST /api/repositories/:id/tasks/resume-all
+// 返回: { "resumed": N, "message": "..." }
+// 把 paused 状态批量改回 queued 并重新入队。
+func (h *TaskHandler) ResumeAllByRepository(c *gin.Context) {
+	repoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid repository id"})
+		return
+	}
+
+	count, err := h.service.ResumeAll(uint(repoID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   err.Error(),
+			"resumed": count,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "resume-all done",
+		"resumed": count,
+	})
+}
+
 // CleanupStuck 清理超时的卡住任务
 func (h *TaskHandler) CleanupStuck(c *gin.Context) {
 	// 默认超时时间为 10 分钟

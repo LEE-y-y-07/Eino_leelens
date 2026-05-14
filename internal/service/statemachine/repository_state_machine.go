@@ -132,6 +132,7 @@ type TaskStatusSummary struct {
 	Succeeded int
 	Failed    int
 	Canceled  int
+	Paused    int
 }
 
 // AggregateStatus 根据任务状态聚合仓库状态
@@ -178,9 +179,9 @@ func (a *RepositoryStatusAggregator) AggregateStatus(
 		return currentRepoStatus, err
 	}
 
-	klog.V(6).Infof("仓库状态聚合: repoID=%d, %s -> %s (summary: total=%d, pending=%d, queued=%d, running=%d, succeeded=%d, failed=%d, canceled=%d)",
+	klog.V(6).Infof("仓库状态聚合: repoID=%d, %s -> %s (summary: total=%d, pending=%d, queued=%d, running=%d, succeeded=%d, failed=%d, canceled=%d, paused=%d)",
 		repoID, currentRepoStatus, newStatus,
-		summary.Total, summary.Pending, summary.Queued, summary.Running, summary.Succeeded, summary.Failed, summary.Canceled)
+		summary.Total, summary.Pending, summary.Queued, summary.Running, summary.Succeeded, summary.Failed, summary.Canceled, summary.Paused)
 
 	return newStatus, nil
 }

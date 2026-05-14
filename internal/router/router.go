@@ -61,6 +61,8 @@ func Setup(
 			repos.GET("/:id/tasks", taskHandler.GetByRepository)
 			repos.GET("/:id/tasks/stats", taskHandler.GetStats) // 新增：任务统计
 			repos.POST("/:id/tasks/cancel-all", taskHandler.CancelAllByRepository) // 新增：批量取消仓库下所有 queued/running 任务
+			repos.POST("/:id/tasks/pause-all", taskHandler.PauseAllByRepository)   // 新增：批量暂停仓库下所有 pending/queued/running 任务
+			repos.POST("/:id/tasks/resume-all", taskHandler.ResumeAllByRepository) // 新增：批量恢复仓库下所有 paused 任务
 			repos.GET("/:id/documents", docHandler.GetByRepository)
 			repos.GET("/:id/documents/index", docHandler.GetIndex)
 			repos.GET("/:id/documents/export", docHandler.Export)
