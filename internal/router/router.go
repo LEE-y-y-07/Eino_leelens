@@ -48,6 +48,7 @@ func Setup(
 			repos.GET("/:id", repoHandler.Get)
 			repos.DELETE("/:id", repoHandler.Delete)
 			repos.POST("/:id/run-all", repoHandler.RunAllTasks)
+			repos.POST("/:id/upgrade-to-deep", repoHandler.UpgradeToDeep) // 新增：light 模式仓库一键升级为 deep（重置所有 task + 切 mode + run-all）
 			repos.POST("/:id/clone", repoHandler.Clone)
 			repos.POST("/:id/purge-local", repoHandler.PurgeLocal)
 			repos.POST("/:id/directory-analyze", repoHandler.AnalyzeDirectory)

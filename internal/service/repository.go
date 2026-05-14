@@ -54,6 +54,29 @@ type CreateRepoRequest struct {
 	GenerationMode string `json:"generation_mode"` // 可选: "deep"(默认) | "light"
 }
 
+// SetGenerationMode 切换仓库的解读模式（"deep" / "light"）。
+// 仅修改 repository.generation_mode 字段，不重置任务、不触发执行 ——
+// caller（如 handler 层的 upgrade-to-deep 编排）需要自己调度
+// task reset 和 run-all。
+func (s *RepositoryService) SetGenerationMode(repoID uint, mode string) error {
+	if mode != "deep" && mode != "light" {
+		return fmt.Errorf("invalid generation mode: %q (expect deep/light)", mode)
+	}
+	repo, err := s.repoRepo.GetBasic(repoID)
+	if err != nil {
+		return fmt.Errorf("获取仓库失败: %w", err)
+	}
+	if repo.GenerationMode == mode {
+		return nil
+	}
+	repo.GenerationMode = mode
+	if err := s.repoRepo.Save(repo); err != nil {
+		return fmt.Errorf("更新仓库模式失败: %w", err)
+	}
+	klog.V(6).Infof("仓库模式已切换: repoID=%d, mode=%s", repoID, mode)
+	return nil
+}
+
 var (
 	ErrInvalidRepositoryURL          = errors.New("invalid repository url")
 	ErrRepositoryAlreadyExists       = errors.New("repository already exists")

@@ -118,6 +118,70 @@ func (h *RepositoryHandler) RunAllTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "tasks started"})
 }
 
+// UpgradeToDeep 把 light 模式仓库一键升级为 deep 模式：
+//  1. 校验仓库当前必须是 light（已经是 deep 直接拒绝）
+//  2. 强制重置仓库下所有 task 到 pending（含取消 active 任务）
+//  3. 切 repository.generation_mode = "deep"
+//  4. 立即触发 run-all 把 task 入队
+//
+// 现有 light 文档会在 deep 重跑过程中被 docService.Update 直接覆盖；
+// 不保留旧版本（前端二次确认弹窗会告知）。
+//
+// 路由: POST /api/repositories/:id/upgrade-to-deep
+func (h *RepositoryHandler) UpgradeToDeep(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	repoID := uint(id)
+
+	repo, err := h.service.Get(repoID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "repository not found"})
+		return
+	}
+	if repo.GenerationMode != "light" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":           "仓库当前不是 light 模式，无法升级",
+			"current_mode":    repo.GenerationMode,
+		})
+		return
+	}
+
+	reset, err := h.taskService.ResetAllByRepository(repoID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+			"reset": reset,
+		})
+		return
+	}
+
+	if err := h.service.SetGenerationMode(repoID, "deep"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+			"reset": reset,
+		})
+		return
+	}
+
+	if err := h.service.RunAllTasks(repoID); err != nil {
+		// mode 已切换，但入队失败：返回 200 提示用户手动 run-all
+		c.JSON(http.StatusOK, gin.H{
+			"message":     "升级到 deep 已完成，但入队失败，请手动点 run-all",
+			"reset":       reset,
+			"enqueue_err": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "upgrade to deep done",
+		"reset":   reset,
+	})
+}
+
 func (h *RepositoryHandler) AnalyzeDirectory(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {

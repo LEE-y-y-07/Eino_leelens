@@ -445,6 +445,26 @@ func (s *TaskService) ResumeAll(repoID uint) (int, error) {
 	return s.lifecycle.ResumeAll(repoID, s.Enqueue)
 }
 
+// ResetAllByRepository 强制重置仓库下所有 task 到 pending（任意状态都可重置）。
+// 用于 light → deep 升级等需要"清空跑过的成果重新开始"的管理场景。
+// 返回被成功重置的任务数量。
+func (s *TaskService) ResetAllByRepository(repoID uint) (int, error) {
+	tasks, err := s.taskRepo.GetByRepository(repoID)
+	if err != nil {
+		return 0, fmt.Errorf("获取任务列表失败: %w", err)
+	}
+	var reset int
+	for i := range tasks {
+		if err := s.ForceReset(tasks[i].ID); err != nil {
+			klog.Warningf("批量重置-单个任务失败: repoID=%d taskID=%d err=%v", repoID, tasks[i].ID, err)
+			continue
+		}
+		reset++
+	}
+	klog.V(6).Infof("批量重置完成: repoID=%d reset=%d", repoID, reset)
+	return reset, nil
+}
+
 // Delete 删除任务
 func (s *TaskService) Delete(taskID uint) error {
 	return s.lifecycle.Delete(taskID, s.docService)
