@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -34,15 +35,26 @@ func TestReadDocToolInvokableRun(t *testing.T) {
 	}
 
 	readTool := NewReadDocTool(docRepo)
+
+	// 用例 1：数字形式（标准）
 	argsJSON, _ := json.Marshal(struct {
 		DocID uint `json:"doc_id"`
 	}{DocID: doc.ID})
-
 	result, err := readTool.InvokableRun(context.Background(), string(argsJSON))
 	if err != nil {
-		t.Fatalf("InvokableRun error: %v", err)
+		t.Fatalf("InvokableRun(number) error: %v", err)
 	}
 	if result != doc.Content {
-		t.Fatalf("unexpected content: %s", result)
+		t.Fatalf("unexpected content (number): %s", result)
+	}
+
+	// 用例 2：字符串形式（DeepSeek 等模型实际行为）
+	strArgs := fmt.Sprintf(`{"doc_id":"%d"}`, doc.ID)
+	result, err = readTool.InvokableRun(context.Background(), strArgs)
+	if err != nil {
+		t.Fatalf("InvokableRun(string) error: %v", err)
+	}
+	if result != doc.Content {
+		t.Fatalf("unexpected content (string): %s", result)
 	}
 }

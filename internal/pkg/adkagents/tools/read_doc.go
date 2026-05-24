@@ -48,8 +48,9 @@ func (t *ReadDocTool) InvokableRun(ctx context.Context, arguments string, opts .
 		return "Error: 文档仓储未初始化", nil
 	}
 
+	// 兼容 LLM 把整数序列化为字符串的情况（如 DeepSeek 常发 "doc_id":"8"）
 	var args struct {
-		DocID uint `json:"doc_id"`
+		DocID json.Number `json:"doc_id"`
 	}
 
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
@@ -57,16 +58,17 @@ func (t *ReadDocTool) InvokableRun(ctx context.Context, arguments string, opts .
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if args.DocID == 0 {
-		klog.Errorf("[ReadDocTool] 参数校验失败: doc_id 不能为空")
-		return "Error: doc_id 不能为空", nil
+	docID, err := args.DocID.Int64()
+	if err != nil || docID <= 0 {
+		klog.Errorf("[ReadDocTool] 参数校验失败: doc_id=%q, err=%v", args.DocID, err)
+		return "Error: doc_id 必须为正整数", nil
 	}
 
-	klog.V(6).Infof("[ReadDocTool] 读取文档: doc_id=%d", args.DocID)
+	klog.V(6).Infof("[ReadDocTool] 读取文档: doc_id=%d", docID)
 
-	doc, err := t.docRepo.Get(args.DocID)
+	doc, err := t.docRepo.Get(uint(docID))
 	if err != nil {
-		klog.Errorf("[ReadDocTool] 读取文档失败: doc_id=%d, error=%v", args.DocID, err)
+		klog.Errorf("[ReadDocTool] 读取文档失败: doc_id=%d, error=%v", docID, err)
 		return fmt.Sprintf("Error: %v", err), nil
 	}
 
