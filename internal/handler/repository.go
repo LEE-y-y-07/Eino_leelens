@@ -10,6 +10,7 @@ import (
 	"gitee.com/li-yuyanglee/leelens-backend/internal/domain"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/eventbus"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/service"
+	"k8s.io/klog/v2"
 )
 
 type RepositoryHandler struct {
@@ -168,7 +169,9 @@ func (h *RepositoryHandler) UpgradeToDeep(c *gin.Context) {
 	}
 
 	// 3) 重新聚合 repo 状态：task 全没了，summary 全 0 → 落到 ready
-	_ = h.taskService.UpdateRepositoryStatus(repoID)
+	if err := h.taskService.UpdateRepositoryStatus(repoID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", repoID, err)
+	}
 
 	// 4) 切 mode
 	if err := h.service.SetGenerationMode(repoID, "deep"); err != nil {

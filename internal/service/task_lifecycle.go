@@ -67,7 +67,9 @@ func (s *TaskLifecycleService) SucceedTask(task *model.Task) error {
 	duration := completedAt.Sub(*task.StartedAt)
 	klog.V(6).Infof("任务执行完成: taskID=%d, duration=%v", task.ID, duration)
 
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 
 	if s.bus != nil {
 		s.bus.Publish(context.Background(), eventbus.TaskEventWriteComplete, eventbus.TaskEvent{
@@ -106,7 +108,9 @@ func (s *TaskLifecycleService) FailTask(task *model.Task, errMsg string) error {
 		return err
 	}
 
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 
 	if s.bus != nil {
 		s.bus.Publish(context.Background(), eventbus.TaskEventWriteFailed, eventbus.TaskEvent{
@@ -151,7 +155,9 @@ func (s *TaskLifecycleService) Reset(taskID uint) error {
 	}
 
 	klog.V(6).Infof("任务已重置: taskID=%d", taskID)
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 
 	return nil
 }
@@ -197,7 +203,9 @@ func (s *TaskLifecycleService) ForceReset(taskID uint) error {
 		return fmt.Errorf("更新任务状态失败: %w", err)
 	}
 
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 
 	return nil
 }
@@ -241,7 +249,9 @@ func (s *TaskLifecycleService) Cancel(taskID uint) error {
 	}
 
 	klog.V(6).Infof("任务已取消: taskID=%d", taskID)
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 
 	return nil
 }
@@ -328,7 +338,9 @@ func (s *TaskLifecycleService) PauseAll(repoID uint) (int, error) {
 		paused++
 	}
 
-	_ = s.UpdateRepositoryStatus(repoID)
+	if err := s.UpdateRepositoryStatus(repoID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", repoID, err)
+	}
 	klog.V(6).Infof("批量暂停完成: repoID=%d paused=%d lastErr=%v", repoID, paused, lastErr)
 	return paused, lastErr
 }
@@ -360,7 +372,9 @@ func (s *TaskLifecycleService) ResumeAll(repoID uint, enqueueFn func(taskID uint
 		resumed++
 	}
 
-	_ = s.UpdateRepositoryStatus(repoID)
+	if err := s.UpdateRepositoryStatus(repoID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", repoID, err)
+	}
 	klog.V(6).Infof("批量恢复完成: repoID=%d resumed=%d lastErr=%v", repoID, resumed, lastErr)
 	return resumed, lastErr
 }
@@ -391,7 +405,9 @@ func (s *TaskLifecycleService) Delete(taskID uint, docService *DocumentService) 
 	}
 
 	klog.V(6).Infof("任务已删除: taskID=%d", taskID)
-	_ = s.UpdateRepositoryStatus(repoID)
+	if err := s.UpdateRepositoryStatus(repoID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", repoID, err)
+	}
 
 	return nil
 }

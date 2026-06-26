@@ -29,12 +29,23 @@ func Setup(
 
 	r.Use(gzip.Gzip(gzip.BestCompression))
 
+	// CORS：来源由配置/环境变量控制，避免 "*" + AllowCredentials 的误配。
+	// 默认仅放行本地前端；当显式配置为 ["*"] 时按规范禁用 AllowCredentials。
+	allowOrigins := cfg.Server.CORSAllowOrigins
+	if len(allowOrigins) == 0 {
+		allowOrigins = []string{"http://localhost:3001"}
+	}
+	allowCredentials := true
+	if len(allowOrigins) == 1 && allowOrigins[0] == "*" {
+		allowCredentials = false
+	}
+
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     allowOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
+		AllowCredentials: allowCredentials,
 	}))
 
 	api := r.Group("/api")

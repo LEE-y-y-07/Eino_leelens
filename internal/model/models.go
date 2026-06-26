@@ -36,14 +36,17 @@ type Task struct {
 	TaskType     domain.TaskType   `json:"task_type" gorm:"size:50;"`                         // 任务类型，生成文档，重写标题，生成目录
 	Title        string            `json:"title" gorm:"type:text"`                            // 不限制，标题可以为空，可以重写
 	Outline      string            `json:"outline" gorm:"type:text"`
-	Status       string            `json:"status" gorm:"size:50;default:pending"` // pending, queued, running, succeeded, failed, canceled
+	// Status 上建复合索引 idx_tasks_status_updated(status, updated_at)：
+	// 既覆盖按状态轮询 (WHERE status='pending') 的高频查询，
+	// 也覆盖清理卡死任务 (WHERE status='queued' AND updated_at < ?) 的范围查询。
+	Status       string            `json:"status" gorm:"size:50;default:pending;index:idx_tasks_status_updated,priority:1"` // pending, queued, running, succeeded, failed, canceled
 	RunAfter     uint              `json:"run_after"`                             // 必须在哪个任务完成后才可以运行
 	ErrorMsg     string            `json:"error_msg" gorm:"size:1000"`
 	SortOrder    int               `json:"sort_order" gorm:"default:0"`
 	StartedAt    *time.Time        `json:"started_at" gorm:"column:started_at"`
 	CompletedAt  *time.Time        `json:"completed_at" gorm:"column:completed_at"`
 	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	UpdatedAt    time.Time         `json:"updated_at" gorm:"index:idx_tasks_status_updated,priority:2"`
 }
 
 type Document struct {

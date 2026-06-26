@@ -71,13 +71,15 @@ func (s *DocumentService) Create(req CreateDocumentRequest) (*model.Document, er
 
 	// 发布文档保存事件，触发向量生成
 	if s.bus != nil && doc.IsLatest {
-		_ = s.bus.Publish(context.Background(), eventbus.DocEventSaved, eventbus.DocEvent{
+		if err := s.bus.Publish(context.Background(), eventbus.DocEventSaved, eventbus.DocEvent{
 			Type:         eventbus.DocEventSaved,
 			RepositoryID: doc.RepositoryID,
 			DocID:        doc.ID,
 			Title:        doc.Title,
 			Content:      doc.Content,
-		})
+		}); err != nil {
+			klog.Warningf("发布文档保存事件失败: docID=%d, error=%v", doc.ID, err)
+		}
 	}
 
 	return doc, nil
@@ -122,13 +124,15 @@ func (s *DocumentService) Update(docID uint, content string) (*model.Document, e
 
 	// 发布文档更新事件，触发向量重新生成
 	if s.bus != nil {
-		_ = s.bus.Publish(context.Background(), eventbus.DocEventUpdated, eventbus.DocEvent{
+		if err := s.bus.Publish(context.Background(), eventbus.DocEventUpdated, eventbus.DocEvent{
 			Type:         eventbus.DocEventUpdated,
 			RepositoryID: newDoc.RepositoryID,
 			DocID:        newDoc.ID,
 			Title:        newDoc.Title,
 			Content:      newDoc.Content,
-		})
+		}); err != nil {
+			klog.Warningf("发布文档更新事件失败: docID=%d, error=%v", newDoc.ID, err)
+		}
 	}
 
 	return newDoc, nil
