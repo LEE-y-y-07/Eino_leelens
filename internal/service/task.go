@@ -172,12 +172,16 @@ func (s *TaskService) Enqueue(taskID uint) error {
 	if err := s.orchestrator.EnqueueJob(job); err != nil {
 		if oldStatus != statemachine.TaskStatusQueued {
 			task.Status = string(oldStatus)
-			_ = s.taskRepo.Save(task)
+			if err := s.taskRepo.Save(task); err != nil {
+				klog.Warningf("回滚任务状态失败: taskID=%d, error=%v", task.ID, err)
+			}
 		}
 		return fmt.Errorf("任务入队失败: %w", err)
 	}
 
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 	return nil
 }
 
@@ -285,7 +289,9 @@ func (s *TaskService) Run(ctx context.Context, taskID uint) error {
 	}
 
 	klog.V(6).Infof("任务状态更新为 running: taskID=%d", taskID)
-	_ = s.UpdateRepositoryStatus(task.RepositoryID)
+	if err := s.UpdateRepositoryStatus(task.RepositoryID); err != nil {
+		klog.Warningf("更新仓库状态失败: repoID=%d, error=%v", task.RepositoryID, err)
+	}
 
 	execErr := s.executeTaskLogic(ctx, task)
 

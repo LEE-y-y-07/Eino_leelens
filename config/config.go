@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,11 @@ type Config struct {
 type ServerConfig struct {
 	Port string `yaml:"port"`
 	Mode string `yaml:"mode"` // debug, release
+	// CORSAllowOrigins 允许的跨域来源白名单。默认仅放行本地前端 dev 地址。
+	// 生产部署应在 config.yaml 或 CORS_ALLOW_ORIGINS 环境变量中显式指定前端域名。
+	// 注意：若设为 ["*"]（通配所有来源），将按 CORS 规范自动禁用 AllowCredentials，
+	// 避免 "*" + 携带凭据" 这一典型误配。
+	CORSAllowOrigins []string `yaml:"cors_allow_origins"`
 }
 
 type DatabaseConfig struct {
@@ -63,8 +69,9 @@ func GetConfig() *Config {
 func loadConfig() *Config {
 	config := &Config{
 		Server: ServerConfig{
-			Port: "8080",
-			Mode: "debug",
+			Port:             "8080",
+			Mode:             "debug",
+			CORSAllowOrigins: []string{"http://localhost:3001"},
 		},
 		Database: DatabaseConfig{
 			Type: "sqlite",
@@ -106,6 +113,20 @@ func loadConfig() *Config {
 	}
 	if dbDSN := os.Getenv("DB_DSN"); dbDSN != "" {
 		config.Database.DSN = dbDSN
+	}
+
+	// CORS 来源环境变量（逗号分隔）
+	if origins := os.Getenv("CORS_ALLOW_ORIGINS"); origins != "" {
+		parts := strings.Split(origins, ",")
+		cleaned := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if v := strings.TrimSpace(p); v != "" {
+				cleaned = append(cleaned, v)
+			}
+		}
+		if len(cleaned) > 0 {
+			config.Server.CORSAllowOrigins = cleaned
+		}
 	}
 
 	// 数据目录环境变量

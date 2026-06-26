@@ -6,6 +6,10 @@
 server:
   port: "8080"
   mode: "debug"  # debug or release
+  # 允许的跨域来源白名单。默认仅放行本地前端 http://localhost:3001。
+  # 生产部署请改成你的前端域名，可写多个。设为 ["*"] 会自动禁用凭据携带。
+  cors_allow_origins:
+    - "http://localhost:3001"
 
 database:
   type: "sqlite"  # sqlite or mysql
