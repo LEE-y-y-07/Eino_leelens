@@ -18,15 +18,37 @@ type RepositoryHandler struct {
 	taskBus     *eventbus.TaskEventBus
 	service     *service.RepositoryService
 	taskService *service.TaskService
+	ragService  *service.RAGService
 }
 
-func NewRepositoryHandler(repoBus *eventbus.RepositoryEventBus, taskBus *eventbus.TaskEventBus, service *service.RepositoryService, taskService *service.TaskService) *RepositoryHandler {
+func NewRepositoryHandler(repoBus *eventbus.RepositoryEventBus, taskBus *eventbus.TaskEventBus, service *service.RepositoryService, taskService *service.TaskService, ragService *service.RAGService) *RepositoryHandler {
 	return &RepositoryHandler{
 		repoBus:     repoBus,
 		taskBus:     taskBus,
 		service:     service,
 		taskService: taskService,
+		ragService:  ragService,
 	}
+}
+
+// Reindex 对仓库内所有最新文档重新生成向量（RAG 回填，用于历史文档/补建索引）。
+// embedding 未启用时返回 409。
+func (h *RepositoryHandler) Reindex(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的仓库ID"})
+		return
+	}
+	if h.ragService == nil || !h.ragService.Enabled() {
+		c.JSON(http.StatusConflict, gin.H{"error": "RAG 未启用：请先在配置中开启 embedding.enabled 并配置 embeddings 端点"})
+		return
+	}
+	n, err := h.ragService.ReindexRepository(c.Request.Context(), uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"repository_id": id, "indexed_documents": n})
 }
 
 func (h *RepositoryHandler) Create(c *gin.Context) {

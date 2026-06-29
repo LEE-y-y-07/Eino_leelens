@@ -17,6 +17,7 @@ type ChatSessionRepository interface {
 	Update(ctx context.Context, session *model.ChatSession) error
 	Delete(ctx context.Context, sessionID string) error
 	UpdateTitle(ctx context.Context, sessionID, title string) error
+	UpdateSummary(ctx context.Context, sessionID, summary string) error
 	UpdateVisibility(ctx context.Context, sessionID, visibility string) error
 	UpdateMessageCount(ctx context.Context, sessionID string, count int) error
 }
@@ -104,6 +105,17 @@ func (r *chatSessionRepository) UpdateTitle(ctx context.Context, sessionID, titl
 		Where("session_id = ?", sessionID).
 		Updates(map[string]interface{}{
 			"title":      title,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+// UpdateSummary 更新会话摘要（L2 跨会话记忆）
+func (r *chatSessionRepository) UpdateSummary(ctx context.Context, sessionID, summary string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.ChatSession{}).
+		Where("session_id = ?", sessionID).
+		Updates(map[string]interface{}{
+			"summary":    summary,
 			"updated_at": time.Now(),
 		}).Error
 }
