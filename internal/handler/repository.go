@@ -34,9 +34,8 @@ func NewRepositoryHandler(repoBus *eventbus.RepositoryEventBus, taskBus *eventbu
 // Reindex 对仓库内所有最新文档重新生成向量（RAG 回填，用于历史文档/补建索引）。
 // embedding 未启用时返回 409。
 func (h *RepositoryHandler) Reindex(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的仓库ID"})
+	id, ok := parseUintParam(c, "id")
+	if !ok {
 		return
 	}
 	if h.ragService == nil || !h.ragService.Enabled() {

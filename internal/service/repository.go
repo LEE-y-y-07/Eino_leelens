@@ -178,15 +178,9 @@ func (s *RepositoryService) Delete(id uint) error {
 		}
 	}
 
-	// TODO 删除数据库记录（使用事务）
-	if err := s.docRepo.DeleteByRepositoryID(id); err != nil {
-		return fmt.Errorf("删除文档失败: %w", err)
-	}
-	if err := s.taskRepo.DeleteByRepositoryID(id); err != nil {
-		return fmt.Errorf("删除任务失败: %w", err)
-	}
-	if err := s.repoRepo.Delete(id); err != nil {
-		return fmt.Errorf("删除仓库失败: %w", err)
+	// 在单事务内级联删除文档/任务/向量/仓库，避免中途失败产生孤儿数据
+	if err := s.repoRepo.DeleteCascade(id); err != nil {
+		return fmt.Errorf("删除仓库及关联数据失败: %w", err)
 	}
 
 	klog.V(6).Infof("仓库删除成功: repoID=%d", id)
