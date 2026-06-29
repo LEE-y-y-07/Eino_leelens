@@ -37,6 +37,11 @@ func NewDocumentService(cfg *config.Config, docRepo repository.DocumentRepositor
 	}
 }
 
+// SetEventBus 注入文档事件总线（用于触发向量化等订阅者）。
+func (s *DocumentService) SetEventBus(bus *eventbus.DocEventBus) {
+	s.bus = bus
+}
+
 type CreateDocumentRequest struct {
 	RepositoryID uint   `json:"repository_id"`
 	TaskID       uint   `json:"task_id"`

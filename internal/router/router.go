@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gitee.com/li-yuyanglee/leelens-backend/config"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/handler"
+	"gitee.com/li-yuyanglee/leelens-backend/internal/middleware"
 )
 
 func Setup(
@@ -48,6 +49,10 @@ func Setup(
 		AllowCredentials: allowCredentials,
 	}))
 
+	// 共享令牌鉴权（cfg.Server.AuthToken 为空时为无操作）。挂在 CORS 之后、路由注册之前，
+	// 一并覆盖 /api、/.well-known，以及 main.go 后续注册的 /mcp/streamable。
+	r.Use(middleware.Auth(cfg.Server.AuthToken))
+
 	api := r.Group("/api")
 	{
 		api.GET("/doc/:id/redirect", docHandler.Redirect)
@@ -69,6 +74,7 @@ func Setup(
 			repos.POST("/:id/user-requests", userRequestHandler.CreateUserRequest)
 			repos.GET("/:id/user-requests", userRequestHandler.ListUserRequests)
 			repos.POST("/:id/set-ready", repoHandler.SetReady)
+			repos.POST("/:id/reindex", repoHandler.Reindex) // 新增：RAG 向量回填（对仓库内全部最新文档重建向量）
 			repos.GET("/:id/incremental-history", repoHandler.GetIncrementalHistory)
 			repos.GET("/:id/tasks", taskHandler.GetByRepository)
 			repos.GET("/:id/tasks/stats", taskHandler.GetStats) // 新增：任务统计

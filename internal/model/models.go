@@ -66,6 +66,21 @@ type Document struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// DocumentVector 文档分块向量（RAG）。向量以小端 float32 序列化存 BLOB，在 Go 内算余弦。
+type DocumentVector struct {
+	ID           uint      `json:"id" gorm:"primaryKey"`
+	DocumentID   uint      `json:"document_id" gorm:"index;uniqueIndex:idx_docvec_doc_chunk_model"`
+	RepositoryID uint      `json:"repository_id" gorm:"index"`
+	ChunkIndex   int       `json:"chunk_index" gorm:"uniqueIndex:idx_docvec_doc_chunk_model"`
+	ModelName    string    `json:"model_name" gorm:"size:128;uniqueIndex:idx_docvec_doc_chunk_model"`
+	Dimension    int       `json:"dimension"`
+	Embedding    []byte    `json:"-" gorm:"type:blob"`
+	Content      string    `json:"content" gorm:"type:text"`
+	ContentHash  string    `json:"content_hash" gorm:"size:64;index"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type DocumentRating struct {
 	ID         uint      `json:"id" gorm:"primaryKey"`
 	DocumentID uint      `json:"document_id" gorm:"index"`
@@ -141,6 +156,7 @@ type ChatSession struct {
 	Visibility   string        `json:"visibility" gorm:"size:20;default:'private'"`      // public, private
 	CreatedBy    uint          `json:"created_by" gorm:"index;default:0"`                // 创建者用户ID
 	MessageCount int           `json:"message_count" gorm:"default:0"`                   // 消息数量缓存
+	Summary      string        `json:"summary" gorm:"type:text"`                         // 会话摘要（L2 跨会话记忆单元，异步生成）
 	Messages     []ChatMessage `json:"messages,omitempty" gorm:"foreignKey:SessionID;references:SessionID"`
 	CreatedAt    time.Time     `json:"created_at"`
 	UpdatedAt    time.Time     `json:"updated_at"`

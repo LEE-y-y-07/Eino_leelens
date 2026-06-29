@@ -10,6 +10,9 @@ server:
   # 生产部署请改成你的前端域名，可写多个。设为 ["*"] 会自动禁用凭据携带。
   cors_allow_origins:
     - "http://localhost:3001"
+  # 共享访问令牌。留空 = 关闭鉴权（默认）。设置后所有 API/MCP 请求需带
+  # Authorization: Bearer <token>（WebSocket/MCP 也接受 ?token=）。
+  auth_token: ""
 
 database:
   type: "sqlite"  # sqlite or mysql
@@ -21,3 +24,23 @@ github:
 data:
   dir: "./data"
   repo_dir: "./data/repos"
+
+chat:
+  # 装配历史对话进上下文的 token 预算（粗略估算）；超出的更早消息会被摘要压缩。
+  history_token_budget: 6000
+
+memory:
+  # L2 跨会话记忆：是否把同一仓库其它会话的摘要注入当前对话上下文。
+  enabled: true
+  max_items: 3
+
+embedding:
+  # L3 语义记忆 / RAG。默认关闭；配好 embeddings 端点后改为 true。
+  enabled: false
+  provider: "openai"      # openai（OpenAI 兼容 /embeddings）| mock（占位向量，仅供链路验证）
+  api_key_name: ""        # 用 api_keys 中的哪条（留空=最高优先级那条）
+  model: ""               # embedding 模型名（留空时用所选 api_key 的 model）
+  dimension: 1536
+  batch_size: 16
+  top_k: 4                # chat 检索注入的片段数
+

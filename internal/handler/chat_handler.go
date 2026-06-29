@@ -16,6 +16,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"gitee.com/li-yuyanglee/leelens-backend/config"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/model"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/pkg/adkagents"
 	"gitee.com/li-yuyanglee/leelens-backend/internal/repository"
@@ -40,10 +41,12 @@ type ChatHandler struct {
 	hub          *ChatHub
 	agentFactory *adkagents.AgentFactory
 	apiKeyRepo   repository.APIKeyRepository
+	summarizer   *service.Summarizer
+	ragService   *service.RAGService
 }
 
 // NewChatHandler 创建处理器
-func NewChatHandler(chatService service.ChatService, repoService *service.RepositoryService, docService *service.DocumentService, agentFactory *adkagents.AgentFactory, apiKeyRepo repository.APIKeyRepository) *ChatHandler {
+func NewChatHandler(chatService service.ChatService, repoService *service.RepositoryService, docService *service.DocumentService, agentFactory *adkagents.AgentFactory, apiKeyRepo repository.APIKeyRepository, ragService *service.RAGService) *ChatHandler {
 	return &ChatHandler{
 		chatService:  chatService,
 		repoService:  repoService,
@@ -51,6 +54,8 @@ func NewChatHandler(chatService service.ChatService, repoService *service.Reposi
 		hub:          NewChatHub(),
 		agentFactory: agentFactory,
 		apiKeyRepo:   apiKeyRepo,
+		summarizer:   service.NewSummarizer(agentFactory),
+		ragService:   ragService,
 	}
 }
 
@@ -259,7 +264,8 @@ func (h *ChatHandler) UpdateSessionVisibility(c *gin.Context) {
 		return
 	}
 
-	// TODO: 权限检查，验证当前用户是否为会话创建者
+	// 注：当前为共享令牌鉴权模型，无独立用户身份，已通过鉴权即视为有权操作。
+	// 若将来引入用户账户（启用 ChatSession.CreatedBy），应在此校验创建者身份。
 
 	// 更新可见性
 	if err := h.chatService.UpdateSessionVisibility(c.Request.Context(), sessionID, req.Visibility); err != nil {
@@ -473,13 +479,32 @@ func (h *ChatHandler) handleMessage(client *Client, msg *ClientMessage) {
 		return
 	}
 
-	// 如果是第一条消息，更新会话标题
+	// 如果是第一条消息，先用截断标题占位，再异步用 LLM 生成更贴切的标题
 	if count == 0 {
 		title := msg.Content
 		if len(title) > 50 {
 			title = title[:50] + "..."
 		}
 		h.chatService.UpdateSessionTitle(ctx, client.sessionID, title)
+
+		if h.summarizer != nil {
+			sessionID := client.sessionID
+			firstMsg := msg.Content
+			go func() {
+				bg := context.Background()
+				t, err := h.summarizer.Summarize(bg, "请为下面这条用户的首条提问生成一个不超过 20 字的简洁会话标题，只输出标题本身，不要任何解释或标点包裹：", firstMsg)
+				if err != nil || t == "" {
+					return // 保留截断版标题
+				}
+				t = strings.Trim(t, "\"'`　 \n")
+				if r := []rune(t); len(r) > 30 {
+					t = string(r[:30])
+				}
+				if t != "" {
+					h.chatService.UpdateSessionTitle(bg, sessionID, t)
+				}
+			}()
+		}
 	}
 
 	// 启动Agent执行
@@ -493,6 +518,172 @@ func (h *ChatHandler) handleStop(client *Client) {
 
 	close(client.stopChan)
 	client.stopChan = make(chan struct{})
+}
+
+// historyTokenBudget 返回历史装配的 token 预算（带默认）。
+func (h *ChatHandler) historyTokenBudget() int {
+	if b := config.GetConfig().Chat.HistoryTokenBudget; b > 0 {
+		return b
+	}
+	return 6000
+}
+
+// estimateTokens 粗略估算文本 token 数（中英混合按约 2 字符/token）。
+func estimateTokens(s string) int {
+	return len([]rune(s))/2 + 1
+}
+
+// chatRoleLabel 把存储角色映射成摘要文本里的中文标签。
+func chatRoleLabel(role string) string {
+	if role == "assistant" {
+		return "助手"
+	}
+	return "用户"
+}
+
+// buildHistoryMessages 把会话历史按 token 预算装配为 ADK 消息（时间正序）。
+// 取较大窗口后从最新往旧累加：预算内的保留为原始消息；超出预算的更早消息压成
+// 一段「早前对话摘要」系统消息置于最前。assistantMsgID 为本轮占位消息需跳过。
+func (h *ChatHandler) buildHistoryMessages(ctx context.Context, sessionID, assistantMsgID string) []*schema.Message {
+	raw, err := h.chatService.ListMessages(ctx, sessionID, 200, nil) // DESC：新→旧
+	if err != nil {
+		klog.Warningf("[ChatHandler] 加载历史消息失败: %v", err)
+		return nil
+	}
+	budget := h.historyTokenBudget()
+	var kept []*model.ChatMessage     // DESC，预算内保留
+	var overflow []*model.ChatMessage // DESC，超预算的更早消息
+	used := 0
+	for _, m := range raw {
+		if m.MessageID == assistantMsgID {
+			continue
+		}
+		if m.Status != "completed" && m.Status != "streaming" {
+			continue
+		}
+		t := estimateTokens(m.Content)
+		if len(kept) == 0 || used+t <= budget {
+			kept = append(kept, m)
+			used += t
+		} else {
+			overflow = append(overflow, m)
+		}
+	}
+
+	var out []*schema.Message
+	// 摘要更早的 overflow（DESC → 反转成正序文本再摘要）
+	if len(overflow) > 0 && h.summarizer != nil {
+		var sb strings.Builder
+		for i := len(overflow) - 1; i >= 0; i-- {
+			sb.WriteString(chatRoleLabel(overflow[i].Role))
+			sb.WriteString("：")
+			sb.WriteString(overflow[i].Content)
+			sb.WriteString("\n")
+		}
+		if sum, sErr := h.summarizer.Summarize(ctx, "请将以下早前的对话压缩为简洁摘要，保留关键事实、结论与未决问题：", sb.String()); sErr == nil && sum != "" {
+			out = append(out, &schema.Message{Role: schema.System, Content: "## 早前对话摘要\n" + sum})
+		} else if sErr != nil {
+			klog.Warningf("[ChatHandler] 历史摘要失败，跳过摘要段: %v", sErr)
+		}
+	}
+	// kept（DESC）反转为时间正序追加
+	for i := len(kept) - 1; i >= 0; i-- {
+		role := schema.User
+		if kept[i].Role == "assistant" {
+			role = schema.Assistant
+		}
+		out = append(out, &schema.Message{Role: role, Content: kept[i].Content})
+	}
+	return out
+}
+
+// maybeUpdateSessionSummary 异步刷新会话摘要（L2 记忆）。每累计若干条消息才重算，控制成本。
+func (h *ChatHandler) maybeUpdateSessionSummary(sessionID string) {
+	if h.summarizer == nil {
+		return
+	}
+	ctx := context.Background()
+	count, err := h.chatService.CountMessages(ctx, sessionID)
+	if err != nil || count < 4 || count%4 != 0 {
+		return
+	}
+	msgs, err := h.chatService.ListMessages(ctx, sessionID, 40, nil) // DESC：新→旧
+	if err != nil || len(msgs) == 0 {
+		return
+	}
+	var sb strings.Builder
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Status != "completed" || strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		sb.WriteString(chatRoleLabel(m.Role))
+		sb.WriteString("：")
+		sb.WriteString(m.Content)
+		sb.WriteString("\n")
+	}
+	sum, err := h.summarizer.Summarize(ctx, "请用 2-4 句话概括下面这段关于某代码仓库的对话，突出用户关心的问题与已得到的关键结论：", sb.String())
+	if err != nil || sum == "" {
+		return
+	}
+	if uErr := h.chatService.UpdateSessionSummary(ctx, sessionID, sum); uErr != nil {
+		klog.Warningf("[ChatHandler] 更新会话摘要失败: %v", uErr)
+	}
+}
+
+// repoMemoryBlock 取本仓库其它会话的摘要，拼成「仓库历史记忆」系统提示段（L2 跨会话记忆）。
+// memory.enabled 关闭或无可用摘要时返回空串。
+func (h *ChatHandler) repoMemoryBlock(ctx context.Context, repoID uint, currentSessionID string) string {
+	mc := config.GetConfig().Memory
+	if !mc.Enabled {
+		return ""
+	}
+	maxItems := mc.MaxItems
+	if maxItems <= 0 {
+		maxItems = 3
+	}
+	sessions, _, err := h.chatService.ListSessions(ctx, repoID, 0, 1, maxItems+5)
+	if err != nil || len(sessions) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	n := 0
+	for _, s := range sessions {
+		if s.SessionID == currentSessionID || strings.TrimSpace(s.Summary) == "" {
+			continue
+		}
+		if n == 0 {
+			sb.WriteString("## 仓库历史记忆（本仓库其它会话的摘要，供参考，不一定与当前问题相关）\n")
+		}
+		sb.WriteString(fmt.Sprintf("- 〈%s〉%s\n", s.Title, s.Summary))
+		n++
+		if n >= maxItems {
+			break
+		}
+	}
+	return sb.String()
+}
+
+// ragBlock 对当前问题做语义检索，拼成「检索到的相关文档片段」系统提示段（L3 RAG）。
+// embedding 关闭、检索出错或无命中时返回空串。
+func (h *ChatHandler) ragBlock(ctx context.Context, repoID uint, query string) string {
+	if h.ragService == nil || !h.ragService.Enabled() {
+		return ""
+	}
+	chunks, err := h.ragService.Retrieve(ctx, repoID, query, config.GetConfig().Embedding.TopK)
+	if err != nil {
+		klog.Warningf("[ChatHandler] RAG 检索失败: %v", err)
+		return ""
+	}
+	if len(chunks) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## 检索到的相关文档片段（按相关度排序，供作答参考；如不相关可忽略）\n")
+	for _, c := range chunks {
+		sb.WriteString(fmt.Sprintf("- [DocID %d, 相关度 %.2f]\n%s\n\n", c.DocID, c.Score, c.Content))
+	}
+	return sb.String()
 }
 
 // runAgent 运行Agent
@@ -547,6 +738,16 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 		}
 	}
 
+	// L2：注入本仓库其它会话的历史摘要作为跨会话记忆
+	if mem := h.repoMemoryBlock(ctx, client.repoID, client.sessionID); mem != "" {
+		repoInfo += "\n" + mem
+	}
+
+	// L3：RAG 语义检索，注入与当前问题相关的文档片段
+	if rag := h.ragBlock(ctx, client.repoID, userMsg.Content); rag != "" {
+		repoInfo += "\n" + rag
+	}
+
 	// 获取 Agent
 	agent, err := h.agentFactory.GetAgent("chat_assistant")
 	if err != nil {
@@ -558,13 +759,6 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 	assistantMsg, err := h.chatService.CreateAssistantMessage(ctx, client.sessionID)
 	if err != nil {
 		client.sendError("INTERNAL_ERROR", "创建AI消息失败")
-		return
-	}
-
-	// 获取历史消息
-	historyMsgs, err := h.chatService.ListMessages(ctx, client.sessionID, 20, nil)
-	if err != nil {
-		client.sendError("INTERNAL_ERROR", "获取历史消息失败")
 		return
 	}
 
@@ -589,24 +783,10 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 		})
 	}
 
-	for _, msg := range historyMsgs {
-		// 跳过本轮刚创建、内容尚为空的 assistant 占位消息 ——
-		// 否则发给 Claude (Bedrock) 时尾巴是 assistant 消息，会被拒
-		// "This model does not support assistant message prefill. The conversation must end with a user message."
-		if msg.MessageID == assistantMsg.MessageID {
-			continue
-		}
-		if msg.Status == "completed" || msg.Status == "streaming" {
-			role := schema.User
-			if msg.Role == "assistant" {
-				role = schema.Assistant
-			}
-			adkMessages = append(adkMessages, &schema.Message{
-				Role:    role,
-				Content: msg.Content,
-			})
-		}
-	}
+	// 历史消息：按 token 预算装配为时间正序，超出预算的更早消息压成一段摘要。
+	// （ListMessages 返回 created_at DESC，buildHistoryMessages 内部已反转为正序，
+	//  并跳过本轮刚创建的 assistant 占位消息，保证对话以用户消息结尾。）
+	adkMessages = append(adkMessages, h.buildHistoryMessages(ctx, client.sessionID, assistantMsg.MessageID)...)
 
 	// 创建Runner并执行 — 按当前最高优先级 enabled 的 api_key 的 provider 决定是否启用流式
 	//
@@ -850,6 +1030,9 @@ streamingDone:
 	sentContents = make(map[string]bool)
 	// 完成消息
 	h.chatService.FinalizeMessage(ctx, assistantMsg.MessageID, tokenUsed, "completed")
+
+	// L2：异步刷新会话摘要，沉淀为跨会话记忆
+	go h.maybeUpdateSessionSummary(client.sessionID)
 
 	// 发送 assistant_end 事件通知前端
 	client.sendEvent(ServerMessage{

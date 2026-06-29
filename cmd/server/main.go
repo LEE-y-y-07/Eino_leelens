@@ -77,6 +77,7 @@ func main() {
 	chatSessionRepo := repository.NewChatSessionRepository(db)
 	chatMessageRepo := repository.NewChatMessageRepository(db)
 	chatToolCallRepo := repository.NewChatToolCallRepository(db)
+	docVectorRepo := repository.NewDocumentVectorRepository(db)
 
 	// 初始化 Service
 	docService := service.NewDocumentService(cfg, docRepo, repoRepo, ratingRepo, nil)
@@ -85,6 +86,7 @@ func main() {
 	userRequestService := service.NewUserRequestService(userRequestRepo, repoRepo)
 	agentService := service.NewAgentService(agentVersionRepo, cfg.Agent.Dir)
 	chatService := service.NewChatService(chatSessionRepo, chatMessageRepo, chatToolCallRepo)
+	ragService := service.NewRAGService(cfg, docRepo, docVectorRepo, apiKeyRepo)
 
 	//初始化系列Writer
 	titleRewriter, err := writers.NewTitleRewriter(cfg, docRepo, taskRepo, repoRepo)
@@ -173,9 +175,13 @@ func main() {
 	// 初始化文档事件总线
 	docEventBus := eventbus.NewDocEventBus()
 	subscriber.NewDocEventSubscriber(taskEventBus, syncEventRepo).Register(docEventBus)
+	subscriber.NewEmbeddingEventSubscriber(ragService).Register(docEventBus)
+	// 激活文档保存/更新事件投递（此前 docService 的 bus 一直是 nil，事件从未真正发出，
+	// 导致"触发向量生成"形同虚设）。RAG 向量化订阅者依赖此处。
+	docService.SetEventBus(docEventBus)
 
 	// 初始化 Handler
-	repoHandler := handler.NewRepositoryHandler(repoEventBus, taskEventBus, repoService, taskService)
+	repoHandler := handler.NewRepositoryHandler(repoEventBus, taskEventBus, repoService, taskService, ragService)
 	taskHandler := handler.NewTaskHandler(taskService)
 	docHandler := handler.NewDocumentHandler(docEventBus, docService)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
@@ -208,7 +214,7 @@ func main() {
 	}
 
 	// 创建 ChatHandler，传入 AgentFactory、RepositoryService 和 DocumentService
-	chatHandler := handler.NewChatHandler(chatService, repoService, docService, agentFactory, apiKeyRepo)
+	chatHandler := handler.NewChatHandler(chatService, repoService, docService, agentFactory, apiKeyRepo, ragService)
 	// 启动ChatHub
 	go chatHandler.GetHub().Run()
 

@@ -17,6 +17,9 @@ type Config struct {
 	Agent    AgentConfig    `yaml:"agent"`
 	Skill    SkillConfig    `yaml:"skill"`
 	Activity ActivityConfig `yaml:"activity"`
+	Chat      ChatConfig      `yaml:"chat"`
+	Memory    MemoryConfig    `yaml:"memory"`
+	Embedding EmbeddingConfig `yaml:"embedding"`
 }
 
 type ServerConfig struct {
@@ -27,6 +30,9 @@ type ServerConfig struct {
 	// 注意：若设为 ["*"]（通配所有来源），将按 CORS 规范自动禁用 AllowCredentials，
 	// 避免 "*" + 携带凭据" 这一典型误配。
 	CORSAllowOrigins []string `yaml:"cors_allow_origins"`
+	// AuthToken 共享访问令牌。非空时所有 API/MCP 请求需带 Authorization: Bearer <token>
+	// （WebSocket/MCP 也接受 ?token=）。留空 = 关闭鉴权（默认，便于自托管/本地开发）。
+	AuthToken string `yaml:"auth_token"`
 }
 
 type DatabaseConfig struct {
@@ -52,6 +58,30 @@ type ActivityConfig struct {
 	DecreaseUnit    time.Duration `yaml:"decrease_unit"`    // 每个活跃点调减的时间
 	CheckInterval   time.Duration `yaml:"check_interval"`   // 定时检查间隔
 	ResetHour       int           `yaml:"reset_hour"`       // 每日重置小时（0-23）
+}
+
+// ChatConfig 对话相关配置
+type ChatConfig struct {
+	// HistoryTokenBudget 装配历史对话进上下文时的 token 预算（粗略估算）。
+	// 超出预算的更早消息会被摘要压缩。<=0 时使用默认值 6000。
+	HistoryTokenBudget int `yaml:"history_token_budget"`
+}
+
+// MemoryConfig L2 跨会话记忆配置
+type MemoryConfig struct {
+	Enabled  bool `yaml:"enabled"`   // 是否注入本仓库其它会话的摘要作为跨会话记忆
+	MaxItems int  `yaml:"max_items"` // 最多注入的历史会话摘要条数，<=0 时用默认 3
+}
+
+// EmbeddingConfig 文档向量化 / RAG 配置。默认关闭，配好 embeddings 端点后再开启。
+type EmbeddingConfig struct {
+	Enabled    bool   `yaml:"enabled"`      // 是否启用向量化与 RAG 检索
+	Provider   string `yaml:"provider"`     // openai（OpenAI 兼容 /embeddings）| mock（占位向量，仅验证链路）
+	APIKeyName string `yaml:"api_key_name"` // 使用 api_keys 中的哪条（空=最高优先级）
+	Model      string `yaml:"model"`        // embedding 模型名（空时用所选 api_key 的 model）
+	Dimension  int    `yaml:"dimension"`    // 向量维度
+	BatchSize  int    `yaml:"batch_size"`   // 单次 embeddings 请求的文本条数上限
+	TopK       int    `yaml:"top_k"`        // chat 检索注入的片段数
 }
 
 var (
@@ -95,6 +125,20 @@ func loadConfig() *Config {
 			CheckInterval:   1 * time.Hour,      // 每小时检查一次
 			ResetHour:       0,                  // 每天凌晨0点重置
 		},
+		Chat: ChatConfig{
+			HistoryTokenBudget: 6000,
+		},
+		Memory: MemoryConfig{
+			Enabled:  true,
+			MaxItems: 3,
+		},
+		Embedding: EmbeddingConfig{
+			Enabled:   false,
+			Provider:  "openai",
+			Dimension: 1536,
+			BatchSize: 16,
+			TopK:      4,
+		},
 	}
 
 	configPath := os.Getenv("CONFIG_PATH")
@@ -127,6 +171,11 @@ func loadConfig() *Config {
 		if len(cleaned) > 0 {
 			config.Server.CORSAllowOrigins = cleaned
 		}
+	}
+
+	// 鉴权令牌环境变量
+	if token := os.Getenv("AUTH_TOKEN"); token != "" {
+		config.Server.AuthToken = token
 	}
 
 	// 数据目录环境变量

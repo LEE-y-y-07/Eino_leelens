@@ -18,6 +18,7 @@ type ChatService interface {
 	ListPublicSessions(ctx context.Context, repoID uint, page, pageSize int) ([]*model.ChatSession, int64, error)
 	DeleteSession(ctx context.Context, sessionID string) error
 	UpdateSessionTitle(ctx context.Context, sessionID, title string) error
+	UpdateSessionSummary(ctx context.Context, sessionID, summary string) error
 	UpdateSessionVisibility(ctx context.Context, sessionID, visibility string) error
 	UpdateMessageCount(ctx context.Context, sessionID string) error
 
@@ -117,6 +118,11 @@ func (s *chatService) DeleteSession(ctx context.Context, sessionID string) error
 // UpdateSessionTitle 更新会话标题
 func (s *chatService) UpdateSessionTitle(ctx context.Context, sessionID, title string) error {
 	return s.sessionRepo.UpdateTitle(ctx, sessionID, title)
+}
+
+// UpdateSessionSummary 更新会话摘要（L2 跨会话记忆）
+func (s *chatService) UpdateSessionSummary(ctx context.Context, sessionID, summary string) error {
+	return s.sessionRepo.UpdateSummary(ctx, sessionID, summary)
 }
 
 // CreateUserMessage 创建用户消息
