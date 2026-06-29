@@ -213,12 +213,18 @@ func (s *TaskLifecycleService) ForceReset(taskID uint) error {
 // Cancel 取消任务
 // 支持取消 Running 和 Queued 状态的任务
 func (s *TaskLifecycleService) Cancel(taskID uint) error {
-	klog.V(6).Infof("取消任务: taskID=%d", taskID)
-
 	task, err := s.taskRepo.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("获取任务失败: %w", err)
 	}
+	return s.cancelTask(task)
+}
+
+// cancelTask 取消一个已取出的任务（供 Cancel 与 CancelAll 复用，
+// 避免批量取消时对每个任务再按 ID 查一次库，消除 N+1）。
+func (s *TaskLifecycleService) cancelTask(task *model.Task) error {
+	taskID := task.ID
+	klog.V(6).Infof("取消任务: taskID=%d", taskID)
 
 	oldStatus := statemachine.TaskStatus(task.Status)
 	newStatus := statemachine.TaskStatusCanceled
@@ -267,12 +273,13 @@ func (s *TaskLifecycleService) CancelAll(repoID uint) (int, error) {
 
 	var canceled int
 	var lastErr error
-	for _, t := range tasks {
+	for i := range tasks {
+		t := &tasks[i]
 		status := statemachine.TaskStatus(t.Status)
 		if status != statemachine.TaskStatusQueued && status != statemachine.TaskStatusRunning {
 			continue
 		}
-		if err := s.Cancel(t.ID); err != nil {
+		if err := s.cancelTask(t); err != nil {
 			klog.Warningf("批量取消-单个任务失败: repoID=%d taskID=%d err=%v", repoID, t.ID, err)
 			lastErr = err
 			continue

@@ -762,6 +762,9 @@ func (h *ChatHandler) runAgent(client *Client, userMsg *model.ChatMessage) {
 		return
 	}
 
+	klog.V(6).Infof("[ChatRun] start repoID=%d session=%s msg=%s", client.repoID, client.sessionID, assistantMsg.MessageID)
+	runStart := time.Now()
+
 	// 发送 thinking_start 事件通知前端开始处理
 	client.sendEvent(ServerMessage{
 		Type:      "thinking_start",
@@ -1033,6 +1036,8 @@ streamingDone:
 
 	// L2：异步刷新会话摘要，沉淀为跨会话记忆
 	go h.maybeUpdateSessionSummary(client.sessionID)
+
+	klog.V(6).Infof("[ChatRun] end msg=%s duration=%v tokens=%d", assistantMsg.MessageID, time.Since(runStart), tokenUsed)
 
 	// 发送 assistant_end 事件通知前端
 	client.sendEvent(ServerMessage{

@@ -14,6 +14,7 @@ type RepoRepository interface {
 	GetBasic(id uint) (*model.Repository, error)
 	Save(repo *model.Repository) error
 	Delete(id uint) error
+	DeleteCascade(id uint) error
 }
 
 type TaskRepository interface {
