@@ -428,7 +428,11 @@ func (c *Client) sendError(code, message string) {
 			Retryable: false,
 		},
 	}
-	data, _ := json.Marshal(event)
+	data, err := json.Marshal(event)
+	if err != nil {
+		klog.Warningf("[Client] 序列化 error 事件失败: %v", err)
+		return
+	}
 	select {
 	case c.send <- data:
 	default:
@@ -449,7 +453,11 @@ func (c *Client) sendPong() {
 		ID:        generateEventID(),
 		Timestamp: time.Now().UnixMilli(),
 	}
-	data, _ := json.Marshal(event)
+	data, err := json.Marshal(event)
+	if err != nil {
+		klog.Warningf("[Client] 序列化 pong 事件失败: %v", err)
+		return
+	}
 	select {
 	case c.send <- data:
 	default:
@@ -1060,7 +1068,11 @@ func (c *Client) sendEvent(event ServerMessage) {
 		return // 连接已关闭，不发送
 	}
 
-	data, _ := json.Marshal(event)
+	data, err := json.Marshal(event)
+	if err != nil {
+		klog.Warningf("[Client] 序列化事件失败: %v", err)
+		return
+	}
 	select {
 	case c.send <- data:
 	default:

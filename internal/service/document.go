@@ -181,14 +181,18 @@ func (s *DocumentService) ExportAll(repoID uint) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	indexFile.Write([]byte(indexContent))
+	if _, err := indexFile.Write([]byte(indexContent)); err != nil {
+		return nil, "", err
+	}
 
 	for _, doc := range docs {
 		f, err := zipWriter.Create(doc.Filename)
 		if err != nil {
 			return nil, "", err
 		}
-		f.Write([]byte(doc.Content))
+		if _, err := f.Write([]byte(doc.Content)); err != nil {
+			return nil, "", err
+		}
 	}
 
 	if err := zipWriter.Close(); err != nil {
